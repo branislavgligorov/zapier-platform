@@ -1,9 +1,9 @@
 'use strict';
 
-const _process_args = process.argv.join(' ');
+const _processArgs = process.argv.join(' ');
 const IS_TESTING =
-  _process_args.indexOf('mocha') > 0 ||
-  _process_args.indexOf('jest') > 0 ||
+  _processArgs.indexOf('mocha') > 0 ||
+  _processArgs.indexOf('jest') > 0 ||
   (process.env.NODE_ENV || '').startsWith('test');
 
 const KILL_MIN_LIMIT = 250;
@@ -15,24 +15,13 @@ const HYDRATE_DIRECTIVE_HOIST = '$HOIST$';
 
 const RENDER_ONLY_METHODS = [
   'authentication.oauth2Config.authorizeUrl',
-  'authentication.oauth1Config.authorizeUrl'
+  'authentication.oauth1Config.authorizeUrl',
 ];
 
-const REQUEST_OBJECT_SHORTHAND_OPTIONS = { replace: true };
+const REQUEST_OBJECT_SHORTHAND_OPTIONS = { isShorthand: true, replace: true };
 
 const DEFAULT_LOGGING_HTTP_ENDPOINT = 'https://httplogger.zapier.com/input';
 const DEFAULT_LOGGING_HTTP_API_KEY = 'R24hzu86v3jntwtX2DtYECeWAB'; // It's ok, this isn't PROD
-
-const SENSITIVE_KEYS = [
-  'api_key',
-  'apikey',
-  'auth',
-  'passwd',
-  'password',
-  'secret',
-  'signature',
-  'token'
-];
 
 const SAFE_LOG_KEYS = [
   'account_id',
@@ -51,24 +40,30 @@ const SAFE_LOG_KEYS = [
   'request_type',
   'response_status_code',
   'selected_api',
-  'timestamp'
+  'timestamp',
+  'trigger_subscription_id',
 ];
 const STATUSES = {
   CALLBACK: 'CALLBACK',
-  SUCCESS: 'SUCCESS'
+  SUCCESS: 'SUCCESS',
 };
 
+const packageJson = require('../package.json');
+const PACKAGE_NAME = packageJson.name;
+const PACKAGE_VERSION = packageJson.version;
+
 module.exports = {
-  IS_TESTING,
-  KILL_MIN_LIMIT,
-  KILL_MAX_LIMIT,
-  RESPONSE_SIZE_LIMIT,
+  DEFAULT_LOGGING_HTTP_API_KEY,
+  DEFAULT_LOGGING_HTTP_ENDPOINT,
   HYDRATE_DIRECTIVE_HOIST,
+  IS_TESTING,
+  KILL_MAX_LIMIT,
+  KILL_MIN_LIMIT,
+  PACKAGE_NAME,
+  PACKAGE_VERSION,
   RENDER_ONLY_METHODS,
   REQUEST_OBJECT_SHORTHAND_OPTIONS,
-  DEFAULT_LOGGING_HTTP_ENDPOINT,
-  DEFAULT_LOGGING_HTTP_API_KEY,
-  SENSITIVE_KEYS,
+  RESPONSE_SIZE_LIMIT,
   SAFE_LOG_KEYS,
-  STATUSES
+  STATUSES,
 };

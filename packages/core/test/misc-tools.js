@@ -13,10 +13,10 @@ describe('Tools', () => {
       e: undefined,
       a: {
         b: {
-          c: 123
-        }
+          c: 123,
+        },
       },
-      other: 'stuff'
+      other: 'stuff',
       // earlyEnd: 123
     };
 
@@ -38,11 +38,11 @@ describe('Tools', () => {
         b: [
           undefined,
           {
-            c: 123
-          }
-        ]
+            c: 123,
+          },
+        ],
       },
-      other: 'stuff'
+      other: 'stuff',
       // earlyEnd: 123
     };
 
@@ -57,7 +57,7 @@ describe('Tools', () => {
 
   it('should truncate many things!', () => {
     const tests = [
-      { value: null, length: 5, suffix: undefined, expected: '' },
+      { value: null, length: 5, suffix: undefined, expected: null },
       { value: undefined, length: 5, suffix: '...', expected: undefined },
       { value: false, length: 5, suffix: '...', expected: '' },
       { value: '', length: 5, suffix: undefined, expected: '' },
@@ -71,7 +71,7 @@ describe('Tools', () => {
         value: Buffer.from('Something'),
         length: 7,
         suffix: ' [...]',
-        expected: 'S [...]'
+        expected: 'S [...]',
       },
       { value: 'Something', length: 0, suffix: '...', expected: '...' },
       { value: 'Something', length: 8, suffix: '...', expected: 'Somet...' },
@@ -81,26 +81,54 @@ describe('Tools', () => {
         value: 'Somèt°˜ı¡•ﬁ⁄',
         length: 9,
         suffix: '...',
-        expected: 'Somèt°...'
+        expected: 'Somèt°...',
       },
       {
         value: 'Somèt°˜ı¡•ﬁ⁄',
         length: 12,
         suffix: '...',
-        expected: 'Somèt°˜ı¡•ﬁ⁄'
-      }
+        expected: 'Somèt°˜ı¡•ﬁ⁄',
+      },
     ];
 
-    tests.forEach(test => {
+    tests.forEach((test) => {
       should(
         dataTools.simpleTruncate(test.value, test.length, test.suffix)
       ).eql(test.expected);
     });
   });
 
+  describe('truncateData', () => {
+    const testData = require('./fixtures/truncate-test-data.json');
+
+    it('should check maxLength limitations', () => {
+      const tooShort = (o) => () => dataTools.truncateData(o, 0);
+      tooShort({}).should.throw(/maxLength must be at least 40/);
+      tooShort([]).should.throw(/maxLength must be at least 40/);
+    });
+
+    it('should truncate data to improve logging efficiency', () => {
+      testData.forEach((test) => {
+        const truncated = dataTools.truncateData(test.input, test.maxLength);
+        truncated.should.deepEqual(test.output);
+        if (test.expectedLength) {
+          JSON.stringify(truncated).length.should.eql(test.expectedLength);
+        }
+      });
+    });
+
+    it('should always result in output with a stringified length <= to maxLength', () => {
+      const totalLength = JSON.stringify(testData).length;
+      for (let i = 40; i < totalLength; i += 1) {
+        const truncated = dataTools.truncateData(testData, i);
+        JSON.stringify(truncated).length.should.lessThanOrEqual(i);
+      }
+    });
+  });
+
   // it('should prepareRequestLog', () => {
   //   const request = {
-  //     url: 'http://www.google.com',
+  //     url: 'https://www.google.com',
   //     headers: {
   //       a: 'b'
   //     },
@@ -116,11 +144,11 @@ describe('Tools', () => {
   //   };
 
   //   const expected = {
-  //     message: '200 GET http://www.google.com',
+  //     message: '200 GET https://www.google.com',
   //     data: {
   //       log_type: 'http',
   //       request_type: 'devplatform-outbound',
-  //       request_url: 'http://www.google.com',
+  //       request_url: 'https://www.google.com',
   //       request_method: 'GET',
   //       request_headers: 'a: b',
   //       response_status_code: 200,
@@ -137,17 +165,17 @@ describe('Tools', () => {
 
   describe('deepFreeze', () => {
     it('should not let you tweak stuff', () => {
-      var output = dataTools.deepFreeze({
+      const output = dataTools.deepFreeze({
         funcArity: (a, b, c) => {
           return c;
         },
-        funcArityArgs: (a, b) => {
+        funcArityArgs: function (a, b) {
           a = arguments;
           return b;
         },
         nested: {
-          thing: 1234
-        }
+          thing: 1234,
+        },
       });
       output.cheese = 'cat';
       should(output.cheese).eql(undefined);
@@ -164,13 +192,13 @@ describe('Tools', () => {
           b: 1,
           c: 2,
           d: {
-            e: 3
+            e: 3,
           },
-          f: null
+          f: null,
         },
         g: [4],
         h: 5,
-        i: undefined
+        i: undefined,
       });
 
       output.should.eql({
@@ -180,7 +208,7 @@ describe('Tools', () => {
         'a.f': null,
         g: [4],
         h: 5,
-        i: undefined
+        i: undefined,
       });
     });
 
@@ -193,14 +221,14 @@ describe('Tools', () => {
             d: {
               e: 3,
               z: {
-                y: 'because'
-              }
+                y: 'because',
+              },
             },
-            f: null
+            f: null,
           },
           g: [4],
           h: 5,
-          i: undefined
+          i: undefined,
         },
         { preserve: { 'a.d': true } }
       );
@@ -214,38 +242,14 @@ describe('Tools', () => {
         'a.f': null,
         g: [4],
         h: 5,
-        i: undefined
+        i: undefined,
       });
-    });
-  });
-
-  describe('recurseExtract', () => {
-    it('should extract values that match', () => {
-      const obj = {
-        secret_key: '1234',
-        another: {
-          secret_key: '5678',
-          deep: {
-            secret: 'abcd'
-          }
-        },
-        name: 'dont_care',
-        id: 88
-      };
-      const matcher = (key, value) => {
-        if (typeof value === 'string') {
-          return key.indexOf('secret') >= 0;
-        }
-        return false;
-      };
-      const values = dataTools.recurseExtract(obj, matcher);
-      values.should.eql(['1234', '5678', 'abcd']);
     });
   });
 
   describe('recurseCleanFuncs', () => {
     it('should handle objects, arrays and function->str', () => {
-      var output = cleaner.recurseCleanFuncs({
+      const output = cleaner.recurseCleanFuncs({
         hello: 'world',
         number: 1234,
         arr: ['0', 1],
@@ -254,15 +258,15 @@ describe('Tools', () => {
         funcArity: (a, b, c) => {
           return c;
         },
-        funcArityArgs: (a, b) => {
+        funcArityArgs: function (a, b) {
           a = arguments;
           return b;
         },
         funcNested: {
-          deeper: () => {}
-        }
+          deeper: () => {},
+        },
       });
-      var expected = {
+      const expected = {
         hello: 'world',
         number: 1234,
         arr: ['0', 1],
@@ -270,7 +274,7 @@ describe('Tools', () => {
         func: '$func$0$f$',
         funcArity: '$func$3$f$',
         funcArityArgs: '$func$2$t$',
-        funcNested: { deeper: '$func$0$f$' }
+        funcNested: { deeper: '$func$0$f$' },
       };
       output.should.eql(expected);
     });
@@ -297,47 +301,72 @@ describe('Tools', () => {
 
   describe('recurseReplaceBank', () => {
     it('should replace stuff with recurseReplaceBank', () => {
-      var template = {
+      const obj = {
         multi: '{{somekey}} {{somekey}} hi!',
         thing: '{{somekey}} hi!',
-        arr: ['{{somekey}} hi!']
+        arr: ['{{somekey}} hi!'],
+        x: {
+          a: '{{somekey}}',
+          c: '{{somekey}} x',
+        },
       };
-      var bank = {
-        '{{somekey}}': 'lolz'
+      const bank = {
+        '{{somekey}}': 'lolz',
       };
-      var out = cleaner.recurseReplaceBank(template, bank);
+      const out = cleaner.recurseReplaceBank(obj, bank);
       out.should.eql({
         multi: 'lolz lolz hi!',
         thing: 'lolz hi!',
-        arr: ['lolz hi!']
+        arr: ['lolz hi!'],
+        x: {
+          a: 'lolz',
+          c: 'lolz x',
+        },
       });
+    });
+
+    it('should recursively resolve curlies', () => {
+      const req = {
+        headers: {
+          // 2 matches in a row caused a bug, so make sure to test that
+          a: '{{bundle.authData.access_token}}',
+          b: '{{bundle.authData.access_token}}',
+        },
+      };
+      const bank = {
+        '{{bundle.authData.access_token}}': 'Let me in',
+      };
+
+      const res = cleaner.recurseReplaceBank(req, bank);
+      res.headers.a.should.eql('Let me in');
+      res.headers.b.should.eql('Let me in');
     });
   });
 
   describe('createRequestOptions', () => {
     it('should allow single url param', () => {
-      const options = requestSugar.createRequestOptions('http://foo.com');
-      options.should.eql({ url: 'http://foo.com' });
+      const options = requestSugar.createRequestOptions('https://foo.com');
+      options.should.eql({ url: 'https://foo.com' });
     });
 
     it('should allow single options param', () => {
       const options = requestSugar.createRequestOptions({
-        url: 'http://foo.com',
-        headers: { a: 'b' }
+        url: 'https://foo.com',
+        headers: { a: 'b' },
       });
       options.should.eql({
-        url: 'http://foo.com',
-        headers: { a: 'b' }
+        url: 'https://foo.com',
+        headers: { a: 'b' },
       });
     });
 
     it('should should allow url param and options param', () => {
-      const options = requestSugar.createRequestOptions('http://foo.com', {
-        headers: { a: 'b' }
+      const options = requestSugar.createRequestOptions('https://foo.com', {
+        headers: { a: 'b' },
       });
       options.should.eql({
-        url: 'http://foo.com',
-        headers: { a: 'b' }
+        url: 'https://foo.com',
+        headers: { a: 'b' },
       });
     });
   });

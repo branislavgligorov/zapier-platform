@@ -1,4 +1,5 @@
 const cp = require('child_process');
+const debug = require('debug')('zapier:misc');
 
 const _ = require('lodash');
 const colors = require('colors/safe');
@@ -10,13 +11,13 @@ const semver = require('semver');
 const {
   PLATFORM_PACKAGE,
   PACKAGE_VERSION,
-  LAMBDA_VERSION
+  NODE_VERSION_CLI_REQUIRES,
 } = require('../constants');
 
 const { fileExistsSync } = require('./files');
 
-const camelCase = str => _.capitalize(_.camelCase(str));
-const snakeCase = str => _.snakeCase(str);
+const camelCase = (str) => _.capitalize(_.camelCase(str));
+const snakeCase = (str) => _.snakeCase(str);
 
 const isWindows = () => {
   return os.platform().match(/^win/i);
@@ -28,43 +29,43 @@ const runCommand = (command, args, options) => {
     command += '.cmd';
   }
 
-  options = options || {};
-  if (global.argOpts.debug) {
-    console.log('\n');
-    console.log(
-      `Running ${colors.bold(
-        command + ' ' + args.join(' ')
-      )} command in ${colors.bold(options.cwd || process.cwd())}:\n`
-    );
+  if (_.get(global, ['argOpts', 'debug'])) {
+    debug.enabled = true;
   }
+
+  options = options || {};
+
+  debug('\n');
+  debug(
+    `Running ${colors.bold(
+      command + ' ' + args.join(' ')
+    )} command in ${colors.bold(options.cwd || process.cwd())}:\n`
+  );
+
   return new Promise((resolve, reject) => {
     const result = cp.spawn(command, args, options);
 
     let stdout = '';
     if (result.stdout) {
-      result.stdout.on('data', data => {
+      result.stdout.on('data', (data) => {
         const str = data.toString();
         stdout += str;
-        if (global.argOpts.debug) {
-          process.stdout.write(colors.green(str));
-        }
+        debug(colors.green(str));
       });
     }
 
     let stderr = '';
     if (result.stderr) {
-      result.stderr.on('data', data => {
+      result.stderr.on('data', (data) => {
         const str = data.toString();
         stderr += str;
-        if (global.argOpts.debug) {
-          process.stderr.write(colors.red(str));
-        }
+        debug(colors.red(str));
       });
     }
 
     result.on('error', reject);
 
-    result.on('close', code => {
+    result.on('close', (code) => {
       if (code !== 0) {
         reject(new Error(stderr));
       }
@@ -73,32 +74,30 @@ const runCommand = (command, args, options) => {
   });
 };
 
-const isValidNodeVersion = () => {
-  const v = semver(LAMBDA_VERSION);
+const isValidNodeVersion = (version = process.version) =>
+  semver.satisfies(version, NODE_VERSION_CLI_REQUIRES);
 
-  return semver.satisfies(process.version, `>=${v.major}.${v.minor}`);
-};
-
-const isValidAppInstall = command => {
-  if (['help', 'init', 'login', 'apps', 'convert'].includes(command)) {
-    return { valid: true };
-  }
-
-  let packageJson;
+const isValidAppInstall = () => {
+  let packageJson, dependedCoreVersion;
   try {
     packageJson = require(path.join(process.cwd(), 'package.json'));
-    const coreVersion = packageJson.dependencies[PLATFORM_PACKAGE];
+    dependedCoreVersion = _.get(packageJson, [
+      'dependencies',
+      PLATFORM_PACKAGE,
+    ]);
     // could check for a lot more, but this is probably enough: https://docs.npmjs.com/files/package.json#dependencies
-    if (!coreVersion) {
+    if (!dependedCoreVersion) {
       return {
         valid: false,
-        reason: `Your app doesn't depend on ${PLATFORM_PACKAGE}. Run \`npm install -E ${PLATFORM_PACKAGE}\` to resolve`
+        reason: `Your app doesn't depend on ${PLATFORM_PACKAGE}. Run \`${colors.cyan(
+          `npm install -E ${PLATFORM_PACKAGE}`
+        )}\` to resolve`,
       };
-    } else if (!semver.valid(coreVersion)) {
-      // semver.valid only matches single versions
+    } else if (!semver.valid(dependedCoreVersion)) {
+      // semver.valid only matches exact versions
       return {
         valid: false,
-        reason: `Your app must depend on an exact version of ${PLATFORM_PACKAGE}. Instead of "${coreVersion}", specify an exact version (such as "${PACKAGE_VERSION}")`
+        reason: `Your app must depend on an exact version of ${PLATFORM_PACKAGE}. Instead of "${dependedCoreVersion}", specify an exact version (such as "${PACKAGE_VERSION}")`,
       };
     }
   } catch (err) {
@@ -106,18 +105,33 @@ const isValidAppInstall = command => {
   }
 
   try {
-    require(path.join(process.cwd(), 'node_modules', PLATFORM_PACKAGE));
+    const installedPackageJson = require(path.join(
+      process.cwd(),
+      'node_modules',
+      PLATFORM_PACKAGE,
+      'package.json'
+    ));
+
+    const installedCoreVersion = installedPackageJson.version;
+    // not an error for now, but something to mention to them
+    if (dependedCoreVersion !== installedCoreVersion) {
+      console.warn(
+        `\nYour code depends on v${dependedCoreVersion} of ${PLATFORM_PACKAGE}, but your local copy is v${installedCoreVersion}. You should probably reinstall your dependencies.\n`
+      );
+    }
   } catch (err) {
     return {
       valid: false,
-      reason: `Looks like you're missing a local installation of ${PLATFORM_PACKAGE}. Run \`npm install\` to resolve`
+      reason: `Looks like you're missing a local installation of ${PLATFORM_PACKAGE}. Run \`${colors.cyan(
+        'npm install'
+      )}\` to resolve`,
     };
   }
 
   return { valid: true };
 };
 
-const npmInstall = appDir => {
+const npmInstall = (appDir) => {
   return runCommand('npm', ['install'], { cwd: appDir });
 };
 
@@ -127,38 +141,22 @@ const npmInstall = appDir => {
   stop returns truthy. Action is always run at least once.
  */
 const promiseDoWhile = (action, stop) => {
-  const loop = () => action().then(result => (stop(result) ? result : loop()));
-  return loop();
-};
-
-/* Delay a promise, by just a bit. */
-const promiseDelay = (delay = 1000) => {
-  return () =>
-    new Promise(resolve => {
-      setTimeout(() => resolve(), delay);
-    });
-};
-
-/* Never stop looping. */
-const promiseForever = (action, delay = 1000) => {
   const loop = () =>
-    action()
-      .then(promiseDelay(delay))
-      .then(loop);
+    action().then((result) => (stop(result) ? result : loop()));
   return loop();
 };
 
 /* Return full path to entry point file as specified in package.json (ie "index.js") */
-const entryPoint = dir => {
+const entryPoint = (dir) => {
   dir = dir || process.cwd();
   const packageJson = require(path.resolve(dir, 'package.json'));
   return fse.realpathSync(path.resolve(dir, packageJson.main));
 };
 
-const printVersionInfo = context => {
+const printVersionInfo = (context) => {
   const versions = [
     `zapier-platform-cli/${PACKAGE_VERSION}`,
-    `node/${process.version}`
+    `node/${process.version}`,
   ];
 
   if (fileExistsSync(path.resolve('./package.json'))) {
@@ -222,7 +220,6 @@ module.exports = {
   npmInstall,
   printVersionInfo,
   promiseDoWhile,
-  promiseForever,
   runCommand,
-  snakeCase
+  snakeCase,
 };

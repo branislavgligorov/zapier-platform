@@ -1,10 +1,13 @@
 'use strict';
 
+const nock = require('nock');
 const should = require('should');
 const createApp = require('../src/create-app');
 const createInput = require('../src/tools/create-input');
 const dataTools = require('../src/tools/data');
+const errors = require('../src/errors');
 const appDefinition = require('./userapp');
+const { HTTPBIN_URL } = require('./constants');
 
 describe('create-app', () => {
   const testLogger = (/* message, data */) => {
@@ -14,183 +17,169 @@ describe('create-app', () => {
 
   const app = createApp(appDefinition);
 
-  const createTestInput = method => {
+  const createTestInput = (method) => {
     const event = {
       bundle: {},
       method,
-      callback_url: 'calback_url'
+      callback_url: 'calback_url',
     };
 
     return createInput(appDefinition, event, testLogger);
   };
 
-  const createRawTestInput = event =>
+  const createRawTestInput = (event) =>
     createInput(appDefinition, event, testLogger);
 
-  it('should return data from promise', done => {
+  it('should return data from promise', (done) => {
     const input = createTestInput(
       'resources.workingfuncpromise.list.operation.perform'
     );
 
     app(input)
-      .then(output => {
+      .then((output) => {
         output.results.should.eql([{ id: 3456 }]);
         done();
       })
       .catch(done);
   });
 
-  it('should return data from promise (direct)', done => {
+  it('should return data from promise (direct)', (done) => {
     const input = createTestInput(
       'triggers.workingfuncpromiseList.operation.perform'
     );
 
     app(input)
-      .then(output => {
+      .then((output) => {
         output.results.should.eql([{ id: 3456 }]);
         done();
       })
       .catch(done);
   });
 
-  it('should return data from a sync function call', done => {
+  it('should return data from a sync function call', (done) => {
     const input = createTestInput('resources.list.list.operation.perform');
 
     app(input)
-      .then(output => {
+      .then((output) => {
         output.results.should.eql([{ id: 1234 }, { id: 5678 }]);
         done();
       })
       .catch(done);
   });
 
-  it('should return data from a sync function call (direct)', done => {
+  it('should return data from a sync function call (direct)', (done) => {
     const input = createTestInput('triggers.listList.operation.perform');
 
     app(input)
-      .then(output => {
+      .then((output) => {
         output.results.should.eql([{ id: 1234 }, { id: 5678 }]);
         done();
       })
       .catch(done);
   });
 
-  it('should return data from an async function call with callback', done => {
+  it('should return data from an async function call with callback', (done) => {
     const input = createTestInput(
       'resources.workingfuncasync.list.operation.perform'
     );
 
     app(input)
-      .then(output => {
+      .then((output) => {
         output.results.should.eql([{ id: 2345 }]);
         done();
       })
       .catch(done);
   });
 
-  it('should return data from an async function call with callback (direct)', done => {
+  it('should return data from an async function call with callback (direct)', (done) => {
     const input = createTestInput(
       'triggers.workingfuncasyncList.operation.perform'
     );
 
     app(input)
-      .then(output => {
+      .then((output) => {
         output.results.should.eql([{ id: 2345 }]);
         done();
       })
       .catch(done);
   });
 
-  it('should return data from live request call, applying HTTP before middleware', done => {
+  it('should return data from live request call, applying HTTP before middleware', async () => {
     const input = createTestInput('resources.contact.list.operation.perform');
+    const output = await app(input);
 
-    app(input)
-      .then(output => {
-        // httpbin.org/get puts request headers in the response body (good for testing):
-        should.exist(output.results.headers);
+    should.exist(output.results.headers);
 
-        // verify that custom http before middleware was applied
-        output.results.headers['X-Hashy'].should.eql(
-          '1a3ba5251cb33ee7ade01af6a7b960b8'
-        );
-        output.results.headers['X-Author'].should.eql('One Cool Dev');
-
-        done();
-      })
-      .catch(done);
+    // verify that custom http before middleware was applied
+    output.results.headers['X-Hashy'].should.deepEqual([
+      '1a3ba5251cb33ee7ade01af6a7b960b8',
+    ]);
+    output.results.headers['X-Author'].should.deepEqual(['One Cool Dev']);
   });
 
-  it('should fail on a live request call', done => {
+  it('should fail on a live request call', async () => {
     const input = createTestInput(
       'resources.failerhttp.list.operation.perform'
     );
 
-    app(input)
-      .then(() => {
-        done('expected an error');
-      })
-      .catch(err => {
-        should(err.message).startWith(
-          'Got 403 calling GET https://httpbin.org/status/403, expected 2xx.\nWhat happened:\n  Starting GET request to https://httpbin.org/status/403\n  Received 403 code from https://httpbin.org/status/403 after '
-        );
-        should(err.message).endWith(
-          'ms\n  Received content ""\n  Got 403 calling GET https://httpbin.org/status/403, expected 2xx.'
-        );
-        done();
-      })
-      .catch(done);
+    try {
+      await app(input);
+    } catch (err) {
+      should(err).instanceOf(errors.ResponseError);
+      err.name.should.eql('ResponseError');
+
+      const response = JSON.parse(err.message);
+      response.status.should.eql(403);
+      response.request.url.should.eql(`${HTTPBIN_URL}/status/403`);
+      return;
+    }
+
+    throw new Error('expected an error');
   });
 
-  it('should fail on a live request call (direct)', done => {
+  it('should fail on a live request call (direct)', async () => {
     const input = createTestInput('triggers.failerhttpList.operation.perform');
 
-    app(input)
-      .then(() => {
-        done('expected an error');
-      })
-      .catch(err => {
-        should(err.message).startWith(
-          'Got 403 calling GET https://httpbin.org/status/403, expected 2xx.\nWhat happened:\n  Starting GET request to https://httpbin.org/status/403\n  Received 403 code from https://httpbin.org/status/403 after '
-        );
-        should(err.message).endWith(
-          'ms\n  Received content ""\n  Got 403 calling GET https://httpbin.org/status/403, expected 2xx.'
-        );
-        done();
-      })
-      .catch(done);
+    try {
+      await app(input);
+    } catch (err) {
+      should(err).instanceOf(errors.ResponseError);
+      err.name.should.eql('ResponseError');
+
+      const response = JSON.parse(err.message);
+      response.status.should.eql(403);
+      response.request.url.should.eql(`${HTTPBIN_URL}/status/403`);
+      return;
+    }
+
+    throw new Error('expected an error');
   });
 
-  it('should make call via z.request', done => {
+  it('should make call via z.request', async () => {
     const input = createTestInput('triggers.requestfuncList.operation.perform');
 
-    app(input)
-      .then(output => {
-        output.results[0].headers['X-Hashy'].should.eql(
-          '1a3ba5251cb33ee7ade01af6a7b960b8'
-        );
-        output.results[0].headers['X-Author'].should.eql('One Cool Dev');
-        done();
-      })
-      .catch(done);
+    const output = await app(input);
+
+    output.results[0].headers['X-Hashy'].should.deepEqual([
+      '1a3ba5251cb33ee7ade01af6a7b960b8',
+    ]);
+    output.results[0].headers['X-Author'].should.deepEqual(['One Cool Dev']);
   });
 
-  it('should make call via z.request with sugar url param', done => {
+  it('should make call via z.request with sugar url param', async () => {
     const input = createTestInput(
       'triggers.requestsugarList.operation.perform'
     );
 
-    app(input)
-      .then(output => {
-        output.results.headers['X-Hashy'].should.eql(
-          '1a3ba5251cb33ee7ade01af6a7b960b8'
-        );
-        output.results.headers['X-Author'].should.eql('One Cool Dev');
-        done();
-      })
-      .catch(done);
+    const output = await app(input);
+
+    output.results.headers['X-Hashy'].should.deepEqual([
+      '1a3ba5251cb33ee7ade01af6a7b960b8',
+    ]);
+    output.results.headers['X-Author'].should.deepEqual(['One Cool Dev']);
   });
 
-  it('should fail on a sync function', done => {
+  it('should fail on a sync function', (done) => {
     const input = createTestInput(
       'resources.failerfunc.list.operation.perform'
     );
@@ -199,26 +188,26 @@ describe('create-app', () => {
       .then(() => {
         done('expected an error');
       })
-      .catch(err => {
+      .catch((err) => {
         should(err.message).startWith('Failer on sync function!');
         done();
       });
   });
 
-  it('should fail on a sync function (direct)', done => {
+  it('should fail on a sync function (direct)', (done) => {
     const input = createTestInput('triggers.failerfuncList.operation.perform');
 
     app(input)
       .then(() => {
         done('expected an error');
       })
-      .catch(err => {
+      .catch((err) => {
         should(err.message).startWith('Failer on sync function!');
         done();
       });
   });
 
-  it('should fail on promise function', done => {
+  it('should fail on promise function', (done) => {
     const input = createTestInput(
       'resources.failerfuncpromise.list.operation.perform'
     );
@@ -227,13 +216,13 @@ describe('create-app', () => {
       .then(() => {
         done('expected an error');
       })
-      .catch(err => {
+      .catch((err) => {
         should(err.message).startWith('Failer on promise function!');
         done();
       });
   });
 
-  it('should fail on promise function (direct)', done => {
+  it('should fail on promise function (direct)', (done) => {
     const input = createTestInput(
       'triggers.failerfuncpromiseList.operation.perform'
     );
@@ -242,13 +231,13 @@ describe('create-app', () => {
       .then(() => {
         done('expected an error');
       })
-      .catch(err => {
+      .catch((err) => {
         should(err.message).startWith('Failer on promise function!');
         done();
       });
   });
 
-  it('should apply HTTP after middleware', done => {
+  it('should apply HTTP after middleware', (done) => {
     const input = createTestInput(
       'resources.contacterror.listWithError.operation.perform'
     );
@@ -257,48 +246,45 @@ describe('create-app', () => {
       .then(() => {
         done('expected an error, got success');
       })
-      .catch(error => {
+      .catch((error) => {
         error.name.should.eql('Error');
         done();
       });
   });
 
-  it('should return data from live request call (direct)', done => {
+  it('should return data from live request call (direct)', async () => {
     const input = createTestInput('triggers.contactList.operation.perform');
-    app(input)
-      .then(output => {
-        output.results.url.should.eql('https://httpbin.org/get');
-        output.results.headers['X-Hashy'].should.eql(
-          '1a3ba5251cb33ee7ade01af6a7b960b8'
-        );
-        output.results.headers['X-Author'].should.eql('One Cool Dev');
-        done();
-      })
-      .catch(done);
+    const output = await app(input);
+
+    output.results.url.should.eql(`${HTTPBIN_URL}/get`);
+    output.results.headers['X-Hashy'].should.deepEqual([
+      '1a3ba5251cb33ee7ade01af6a7b960b8',
+    ]);
+    output.results.headers['X-Author'].should.deepEqual(['One Cool Dev']);
   });
 
-  it('should return a rendered URL for OAuth2 authorizeURL', done => {
+  it('should return a rendered URL for OAuth2 authorizeURL', (done) => {
     const oauth2AppDefinition = dataTools.jsonCopy(appDefinition);
     oauth2AppDefinition.authentication = {
       type: 'oauth2',
       test: {
-        url: 'http://example.com',
-        method: 'GET'
+        url: 'https://example.com',
+        method: 'GET',
       },
       oauth2Config: {
         authorizeUrl: {
-          url: 'http://{{bundle.authData.domain}}.example.com',
+          url: 'https://{{bundle.authData.domain}}.example.com',
           params: {
-            scope: '{{bundle.inputData.scope}}'
-          }
+            scope: '{{bundle.inputData.scope}}',
+          },
         },
         getAccessToken: {
-          url: 'http://example.com/oauth2/token',
+          url: 'https://example.com/oauth2/token',
           body: {},
-          method: 'POST'
+          method: 'POST',
         },
-        autoRefresh: false
-      }
+        autoRefresh: false,
+      },
     };
     const oauth2App = createApp(oauth2AppDefinition);
     const input = createTestInput('authentication.oauth2Config.authorizeUrl');
@@ -306,147 +292,164 @@ describe('create-app', () => {
     input.bundle.inputData = { scope: 'read,write' };
 
     oauth2App(input)
-      .then(output => {
+      .then((output) => {
         output.results.should.eql(
-          'http://my-sub.example.com?scope=read%2Cwrite'
+          'https://my-sub.example.com?scope=read%2Cwrite'
         );
         done();
       })
       .catch(done);
   });
 
-  it('should run a raw provided request', done => {
+  it('should run a raw provided request', (done) => {
     const input = createRawTestInput({
       command: 'request',
       bundle: {
         request: {
-          url: 'https://httpbin.org/get'
-        }
-      }
+          url: `${HTTPBIN_URL}/get`,
+        },
+      },
     });
     app(input)
-      .then(output => {
+      .then((output) => {
         const response = output.results;
-        JSON.parse(response.content).url.should.eql('https://httpbin.org/get');
+        JSON.parse(response.content).url.should.eql(`${HTTPBIN_URL}/get`);
         done();
       })
       .catch(done);
   });
 
   describe('HTTP after middleware for auth refresh', () => {
-    it('should be applied to OAuth2 refresh app on shorthand requests', done => {
-      const oauth2AppDefinition = dataTools.deepCopy(appDefinition);
-      oauth2AppDefinition.authentication = {
-        type: 'oauth2',
-        test: {},
-        oauth2Config: {
-          authorizeUrl: {}, // stub, not needed for this test
-          getAccessToken: {}, // stub, not needed for this test
-          autoRefresh: true
-        }
-      };
-      const oauth2App = createApp(oauth2AppDefinition);
+    // general purpose response tester
+    const testResponse = async (appDef, useShorthand, errorVerifier) => {
+      const methodPart = useShorthand
+        ? 'executeRequestAsShorthand'
+        : 'executeRequestAsFunc';
 
+      const app = createApp(appDef);
       const event = {
         command: 'execute',
         bundle: {
-          inputData: {
-            url: 'https://httpbin.org/status/401'
-          }
+          inputData: useShorthand
+            ? {
+                url: `${HTTPBIN_URL}/status/401`,
+              }
+            : {
+                options: {
+                  url: `${HTTPBIN_URL}/status/401`,
+                },
+              },
         },
-        method: 'resources.executeRequestAsShorthand.list.operation.perform'
+        method: `resources.${methodPart}.list.operation.perform`,
       };
-      oauth2App(createInput(oauth2AppDefinition, event, testLogger))
-        .then(() => {
-          done('expected an error, got success');
-        })
-        .catch(error => {
-          error.name.should.eql('RefreshAuthError');
-          done();
-        });
+
+      const input = createInput(appDef, event, testLogger);
+      const err = await app(input).should.be.rejected();
+
+      errorVerifier(err);
+    };
+    // the two types of error verification
+    const verifyRefreshAuthError = (error) => {
+      should(error).instanceOf(errors.RefreshAuthError);
+      error.name.should.eql('RefreshAuthError');
+    };
+
+    const verifyResponseError = (error) => {
+      should(error).instanceOf(errors.ResponseError);
+      error.name.should.eql('ResponseError');
+      const response = JSON.parse(error.message);
+      should(response.status).equal(401);
+    };
+
+    it('should be applied to OAuth2 refresh app on shorthand requests', () => {
+      return testResponse(
+        {
+          ...appDefinition,
+          authentication: {
+            type: 'oauth2',
+            oauth2Config: {
+              autoRefresh: true,
+            },
+          },
+        },
+        true,
+        verifyRefreshAuthError
+      );
     });
 
-    it('should be applied to OAuth2 refresh app on z.request in functions', done => {
-      const oauth2AppDefinition = dataTools.deepCopy(appDefinition);
-      oauth2AppDefinition.authentication = {
-        type: 'oauth2',
-        test: {},
-        oauth2Config: {
-          authorizeUrl: {}, // stub, not needed for this test
-          getAccessToken: {}, // stub, not needed for this test
-          autoRefresh: true
-        }
-      };
-      const oauth2App = createApp(oauth2AppDefinition);
-
-      const event = {
-        command: 'execute',
-        bundle: {
-          inputData: {
-            options: {
-              url: 'https://httpbin.org/status/401'
-            }
-          }
+    it('should be applied to OAuth2 refresh app on z.request in functions', () => {
+      return testResponse(
+        {
+          ...appDefinition,
+          authentication: {
+            type: 'oauth2',
+            oauth2Config: {
+              autoRefresh: true,
+            },
+          },
         },
-        method: 'resources.executeRequestAsFunc.list.operation.perform'
-      };
-      oauth2App(createInput(oauth2AppDefinition, event, testLogger))
-        .then(() => {
-          done('expected an error, got success');
-        })
-        .catch(error => {
-          error.name.should.eql('RefreshAuthError');
-          done();
-        });
+        false,
+        verifyRefreshAuthError
+      );
     });
 
-    it('should be applied to session auth app on z.request in functions', done => {
-      const sessionAuthAppDefinition = dataTools.deepCopy(appDefinition);
-      sessionAuthAppDefinition.authentication = {
-        type: 'session',
-        test: {},
-        sessionConfig: {
-          perform: {} // stub, not needed for this test
-        }
-      };
-      const sessionAuthApp = createApp(sessionAuthAppDefinition);
-
-      const event = {
-        command: 'execute',
-        bundle: {
-          inputData: {
-            options: {
-              url: 'https://httpbin.org/status/401'
-            }
-          }
+    it('should not be applied to OAuth2 refresh app on z.request in functions by default', () => {
+      return testResponse(
+        {
+          ...appDefinition,
+          authentication: {
+            type: 'oauth2',
+            oauth2Config: {
+              autoRefresh: false,
+            },
+          },
         },
-        method: 'resources.executeRequestAsFunc.list.operation.perform'
-      };
-      sessionAuthApp(createInput(sessionAuthAppDefinition, event, testLogger))
-        .then(() => {
-          done('expected an error, got success');
-        })
-        .catch(error => {
-          error.name.should.eql('RefreshAuthError');
-          done();
-        });
+        false,
+        verifyResponseError
+      );
+    });
+
+    it('should be applied to session auth app on z.request in functions', () => {
+      return testResponse(
+        {
+          ...appDefinition,
+          authentication: {
+            type: 'session',
+          },
+        },
+        false,
+        verifyRefreshAuthError
+      );
+    });
+
+    it('should not be applied to custom auth app on z.request in functions', () => {
+      return testResponse(
+        {
+          ...appDefinition,
+          authentication: {
+            type: 'custom',
+          },
+        },
+        false,
+        verifyResponseError
+      );
     });
   });
 
   describe('inputFields', () => {
     const testInputOutputFields = (desc, method) => {
-      it(desc, done => {
+      it(desc, (done) => {
         const input = createTestInput(method);
         input.bundle.key1 = 'key 1';
         input.bundle.key2 = 'key 2';
         input.bundle.key3 = 'key 3';
 
         app(input)
-          .then(output => {
+          .then((output) => {
             output.results.should.eql([
               { key: 'key 1' },
               { key: 'key 2' },
-              { key: 'key 3' }
+              { key: 'key 3' },
             ]);
             done();
           })
@@ -496,17 +499,17 @@ describe('create-app', () => {
   });
 
   describe('hydration', () => {
-    it('should hydrate method', done => {
+    it('should hydrate method', (done) => {
       const input = createTestInput(
         'resources.honkerdonker.list.operation.perform'
       );
 
       app(input)
-        .then(output => {
+        .then((output) => {
           output.results.should.eql([
             'hydrate|||{"type":"method","method":"resources.honkerdonker.get.operation.perform","bundle":{"honkerId":1}}|||hydrate',
             'hydrate|||{"type":"method","method":"resources.honkerdonker.get.operation.perform","bundle":{"honkerId":2}}|||hydrate',
-            'hydrate|||{"type":"method","method":"resources.honkerdonker.get.operation.perform","bundle":{"honkerId":3}}|||hydrate'
+            'hydrate|||{"type":"method","method":"resources.honkerdonker.get.operation.perform","bundle":{"honkerId":3}}|||hydrate',
           ]);
           done();
         })
@@ -520,7 +523,7 @@ describe('create-app', () => {
         createTestInput(
           'resources.executeCallbackRequest.list.operation.perform'
         )
-      ).then(output => {
+      ).then((output) => {
         results = output;
       })
     );
@@ -532,21 +535,21 @@ describe('create-app', () => {
   });
 
   describe('using require', () => {
-    const createDefinition = source => ({
+    const createDefinition = (source) => ({
       triggers: {
         testRequire: {
           display: {
             label: 'Test Require',
-            description: 'Put zRequire through the ringer'
+            description: 'Put zRequire through the ringer',
           },
           key: 'testRequire',
           operation: {
             perform: {
-              source
-            }
-          }
-        }
-      }
+              source,
+            },
+          },
+        },
+      },
     });
 
     it('should throw a require error', async () => {
@@ -567,7 +570,7 @@ describe('create-app', () => {
             'For technical reasons, use z.require() instead of require().',
             'What happened:',
             '  Executing triggers.testRequire.operation.perform with bundle',
-            '  For technical reasons, use z.require() instead of require().'
+            '  For technical reasons, use z.require() instead of require().',
           ].join('\n')
         );
       }
@@ -598,6 +601,246 @@ describe('create-app', () => {
       await appFail(input).should.be.rejectedWith(
         /Cannot find module 'non-existing-package'/
       );
+    });
+  });
+
+  describe('response.content parsing', () => {
+    it('should handle JSON', async () => {
+      const app = createApp(appDefinition);
+
+      const event = {
+        command: 'execute',
+        bundle: {
+          inputData: {
+            url: `${HTTPBIN_URL}/get`,
+          },
+        },
+        method: 'resources.executeRequestAsShorthand.create.operation.perform',
+      };
+      const { results } = await app(
+        createInput(appDefinition, event, testLogger)
+      );
+      should(results).be.an.Object().and.not.be.an.Array();
+    });
+    it('should handle form', async () => {
+      const app = createApp(appDefinition);
+
+      // httpbin doesn't actually have a form-urlencoded endpoint
+      nock('https://x-www-form-urlencoded.example.com')
+        .get('/')
+        .reply(200, 'foo=bar', {
+          'content-type': 'application/x-www-form-urlencoded',
+        });
+
+      const event = {
+        command: 'execute',
+        bundle: {
+          inputData: {
+            url: 'https://x-www-form-urlencoded.example.com/',
+          },
+        },
+        method: 'resources.executeRequestAsShorthand.create.operation.perform',
+      };
+      const { results } = await app(
+        createInput(appDefinition, event, testLogger)
+      );
+      should(results).match({ foo: 'bar' });
+    });
+    it('should error on other types like XML', async () => {
+      const app = createApp(appDefinition);
+
+      const event = {
+        command: 'execute',
+        bundle: {
+          inputData: {
+            url: `${HTTPBIN_URL}/xml`,
+          },
+        },
+        method: 'resources.executeRequestAsShorthand.create.operation.perform',
+      };
+      await app(
+        createInput(appDefinition, event, testLogger)
+      ).should.be.rejectedWith(
+        /Response needs to be JSON, form-urlencoded or parsed in middleware/
+      );
+    });
+  });
+
+  describe('error skipping', () => {
+    describe('shorthand requests', () => {
+      const method =
+        'resources.executeRequestAsShorthand.create.operation.perform';
+      it('should throw on shorthand by default', async () => {
+        const app = createApp(appDefinition);
+
+        const event = {
+          command: 'execute',
+          bundle: {
+            inputData: {
+              url: `${HTTPBIN_URL}/status/400`,
+            },
+          },
+          method,
+        };
+        const err = await app(
+          createInput(appDefinition, event, testLogger)
+        ).should.be.rejected();
+        JSON.parse(err.message).status.should.eql(400);
+      });
+
+      it('should throw on shorthand even when global skip flag is present', async () => {
+        const appDef = {
+          ...appDefinition,
+          flags: {
+            // this is ignored for shorthand requests
+            skipThrowForStatus: true,
+          },
+        };
+        const app = createApp(appDef);
+
+        const event = {
+          command: 'execute',
+          bundle: {
+            inputData: {
+              url: `${HTTPBIN_URL}/status/400`,
+            },
+          },
+          method,
+        };
+        const err = await app(
+          createInput(appDef, event, testLogger)
+        ).should.be.rejected();
+        JSON.parse(err.message).status.should.eql(400);
+      });
+
+      it('should skip throw on shorthand if local flag is set', async () => {
+        const appDef = {
+          ...appDefinition,
+        };
+        appDef.resources.executeRequestAsShorthand.create.operation.perform.skipThrowForStatus = true;
+
+        const app = createApp(appDef);
+
+        // httpbin can't return a body w/ the status endpoint
+        const url = 'https://status-with-body.example.com';
+        nock(url)
+          .get('/')
+          .reply(400, { status: 400, message: 'mocked response' });
+
+        const event = {
+          command: 'execute',
+          bundle: { inputData: { url } },
+          method,
+        };
+        const { results } = await app(
+          createInput(appDef, event, testLogger)
+        ).should.be.fulfilled();
+
+        results.status.should.eql(400);
+        results.message.should.eql('mocked response');
+      });
+    });
+
+    describe('z.request requests', () => {
+      const method = 'resources.executeRequestAsFunc.list.operation.perform';
+      it('should throw on request by default', async () => {
+        const app = createApp(appDefinition);
+
+        const event = {
+          command: 'execute',
+          bundle: {
+            inputData: {
+              options: { url: `${HTTPBIN_URL}/status/400` },
+            },
+          },
+          method,
+        };
+        const err = await app(
+          createInput(appDefinition, event, testLogger)
+        ).should.be.rejected();
+
+        JSON.parse(err.message).status.should.eql(400);
+      });
+
+      it('should skip throw when global skip flag is present', async () => {
+        const appDef = {
+          ...appDefinition,
+          flags: {
+            skipThrowForStatus: true,
+          },
+        };
+        // httpbin can't return a body w/ the status endpoint
+        const url = 'https://status-with-body.example.com';
+        nock(url)
+          .get('/')
+          .reply(400, [{ id: 1, status: 400, message: 'mocked response' }]);
+
+        const app = createApp(appDef);
+        const event = {
+          command: 'execute',
+          bundle: {
+            inputData: { options: { url } },
+          },
+          method,
+        };
+        const { results } = await app(
+          createInput(appDef, event, testLogger)
+        ).should.be.fulfilled();
+
+        results[0].status.should.eql(400);
+        results[0].message.should.eql('mocked response');
+      });
+
+      it('should skip throw if local flag is set', async () => {
+        const app = createApp(appDefinition);
+
+        // httpbin can't return a body w/ the status endpoint
+        const url = 'https://status-with-body.example.com';
+        nock(url)
+          .get('/')
+          .reply(400, [{ id: 1, status: 400, message: 'mocked response' }]);
+
+        const event = {
+          command: 'execute',
+          bundle: {
+            inputData: { options: { url, skipThrowForStatus: true } },
+          },
+          method,
+        };
+        const { results } = await app(
+          createInput(appDefinition, event, testLogger)
+        ).should.be.fulfilled();
+
+        results[0].status.should.eql(400);
+        results[0].message.should.eql('mocked response');
+      });
+
+      it('should throw if local flag is false and global flag is set', async () => {
+        const appDef = {
+          ...appDefinition,
+          flags: {
+            skipThrowForStatus: true,
+          },
+        };
+        const app = createApp(appDef);
+
+        const event = {
+          command: 'execute',
+          bundle: {
+            inputData: {
+              options: {
+                url: `${HTTPBIN_URL}/status/400`,
+                skipThrowForStatus: false,
+              },
+            },
+          },
+          method,
+        };
+        const err = await app(
+          createInput(appDefinition, event, testLogger)
+        ).should.be.rejected();
+        JSON.parse(err.message).status.should.eql(400);
+      });
     });
   });
 });

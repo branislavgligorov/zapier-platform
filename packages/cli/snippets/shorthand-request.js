@@ -1,10 +1,10 @@
 const triggerShorthandRequest = {
+  url: 'https://{{bundle.authData.subdomain}}.example.com/v2/api/recipes.json',
   method: 'GET',
-  url: 'http://{{bundle.authData.subdomain}}.example.com/v2/api/recipes.json',
   params: {
     sort_by: 'id',
-    sort_order: 'DESC'
-  }
+    sort_order: 'DESC',
+  },
 };
 
 const App = {
@@ -14,8 +14,8 @@ const App = {
       // ...
       operation: {
         // ...
-        perform: triggerShorthandRequest
-      }
-    }
-  }
+        perform: triggerShorthandRequest,
+      },
+    },
+  },
 };

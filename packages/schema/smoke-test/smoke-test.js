@@ -34,7 +34,7 @@ const setupTempWorkingDir = () => {
 const npmInstall = (packagePath, workdir) => {
   spawnSync('npm', ['install', packagePath], {
     encoding: 'utf8',
-    cwd: workdir
+    cwd: workdir,
   });
 };
 
@@ -49,13 +49,13 @@ describe('smoke tests - setup will take some time', () => {
     // Global context that will be available for all test cases in this test suite
     package: {
       filename: null,
-      path: null
+      path: null,
     },
     workdir: null,
     testScripts: {
       validate: null,
-      export: null
-    }
+      export: null,
+    },
   };
 
   before(() => {
@@ -71,6 +71,7 @@ describe('smoke tests - setup will take some time', () => {
       context.workdir
     );
     context.testScripts.export = copyTestScript('test-export', context.workdir);
+    console.log('setup complete!');
   });
 
   after(() => {
@@ -78,27 +79,26 @@ describe('smoke tests - setup will take some time', () => {
     fs.removeSync(context.workdir);
   });
 
-  it('package size should not change much', async () => {
+  it('package size should not change much', async function () {
     const baseUrl = 'https://registry.npmjs.org/zapier-platform-schema';
     let res = await fetch(baseUrl);
     const packageInfo = await res.json();
     const latestVersion = packageInfo['dist-tags'].latest;
 
     res = await fetch(
-      `${baseUrl}/-/zapier-platform-schema-${latestVersion}.tgz`,
-      {
-        method: 'HEAD'
-      }
+      `${baseUrl}/-/zapier-platform-schema-${latestVersion}.tgz`
     );
     const baselineSize = res.headers.get('content-length');
     const newSize = fs.statSync(context.package.path).size;
     newSize.should.be.within(baselineSize * 0.7, baselineSize * 1.3);
+
+    this.test.title += ` (${baselineSize} -> ${newSize} bytes)`;
   });
 
   it('should to able to validate app definitions', () => {
     const proc = spawnSync(context.testScripts.validate, {
       encoding: 'utf8',
-      cwd: context.workdir
+      cwd: context.workdir,
     });
     const results = JSON.parse(proc.stdout);
     results.length.should.eql(2);
@@ -122,7 +122,7 @@ describe('smoke tests - setup will take some time', () => {
 
     const proc = spawnSync(context.testScripts.export, {
       encoding: 'utf8',
-      cwd: context.workdir
+      cwd: context.workdir,
     });
     const expectedSchema = JSON.parse(proc.stdout);
 

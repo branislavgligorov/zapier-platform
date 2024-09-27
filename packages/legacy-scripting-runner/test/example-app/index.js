@@ -1,6 +1,8 @@
-const { AUTH_JSON_SERVER_URL } = require('../auth-json-server');
+const { AUTH_JSON_SERVER_URL, HTTPBIN_URL } = require('../constants');
 
 const legacyScriptingSource = `
+    var qs = require('querystring');
+
     var Zap = {
       getUser: function(bundle) {
         var response = z.request({
@@ -36,16 +38,33 @@ const legacyScriptingSource = `
         };
       },
 
-      pre_oauthv2_token: function(bundle) {
+      pre_oauthv2_token_basic: function(bundle) {
         bundle.request.url += 'token';
+        bundle.request.data = bundle.request.params;
         return bundle.request;
       },
 
-      post_oauthv2_token: function(bundle) {
+      post_oauthv2_token_basic: function(bundle) {
         var data = z.JSON.parse(bundle.response.content);
         data.something_custom += '!!';
         data.name = 'Jane Doe';
         return data;
+      },
+
+      pre_oauthv2_token_payload_only_in_params: function(bundle) {
+        bundle.request.url += 'token';
+        if (bundle.request.params.grant_type) {
+          bundle.request.data = bundle.request.params;
+        } else {
+          throw new Error('should not reach here');
+        }
+        return bundle.request;
+      },
+
+      pre_oauthv2_token_yet_to_save_auth_fields: function(bundle) {
+        bundle.request.url = '${HTTPBIN_URL}/post';
+        bundle.request.data = bundle.auth_fields;
+        return bundle.request;
       },
 
       pre_oauthv2_refresh_auth_json_server: function(bundle) {
@@ -54,12 +73,12 @@ const legacyScriptingSource = `
       },
 
       pre_oauthv2_refresh_httpbin_form: function(bundle) {
-        bundle.request.url = 'https://httpbin.zapier-tooling.com/post';
+        bundle.request.url = '${HTTPBIN_URL}/post';
         return bundle.request;
       },
 
       pre_oauthv2_refresh_httpbin_json: function(bundle) {
-        bundle.request.url = 'https://httpbin.zapier-tooling.com/post';
+        bundle.request.url = '${HTTPBIN_URL}/post';
         bundle.request.headers['Content-Type'] = 'application/json';
         return bundle.request;
       },
@@ -76,11 +95,30 @@ const legacyScriptingSource = `
         bundle.request.headers['Content-Type'] = 'application/x-www-form-urlencoded';
 
         return {
-          url: 'https://httpbin.zapier-tooling.com/post',
+          url: '${HTTPBIN_URL}/post',
           method: bundle.request.method,
           headers: bundle.request.headers,
           data: bundle.request.data
         };
+      },
+
+      pre_oauthv2_refresh_does_not_retry: function(bundle) {
+        if (bundle.request.data.client_id) {
+          bundle.request.url = '${HTTPBIN_URL}/post';
+          return bundle.request;
+        }
+        throw new Error('should not reach here');
+      },
+
+      pre_oauthv2_refresh_bundle_load: function(bundle) {
+        bundle.request.url = '${HTTPBIN_URL}/post';
+        bundle.request.data = qs.stringify(bundle.load);
+        bundle.request.headers['Content-Type'] = 'application/x-www-form-urlencoded';
+        return bundle.request;
+      },
+
+      post_oauthv2_token_returns_nothing: function(bundle) {
+        // do nothing
       },
 
       get_connection_label: function(bundle) {
@@ -126,7 +164,44 @@ const legacyScriptingSource = `
         contacts[0].name = 'Patched by KEY_post_poll!';
         contacts[0].jqueryText = $('<div>jQuery works!</div>').text();
         contacts[0].jqueryParam = $.param({width: 1680, height: 1050});
+        contacts[0].randomJson = $.parseJSON('{"hey":1}');
+
+        contacts[0].inArray = $.inArray('a', ['a', 'b', 'b', 'a'], 2);
+        contacts[0].isArray = $.isArray(contacts);
+        contacts[0].isEmptyObject = $.isEmptyObject(contacts);
+        contacts[0].isFunction = $.isFunction(function() {});
+        contacts[0].isNumeric = $.isNumeric(123);
+        contacts[0].isPlainObject = $.isPlainObject(contacts);
+        contacts[0].trimmed = $.trim(' hello world  ');
+        contacts[0].type = $.type(contacts);
+        contacts[0].extend = $.extend({}, { extended: true });
+
+        var base = 1000;
+        $.each(contacts, function(index, item) {
+          // 'item' and 'this' should be the same object
+          this.anotherId = base;
+          item.anotherId += index;
+        });
+
         return contacts;
+      },
+
+      contact_post_post_poll_jquery_dom: function(bundle) {
+        // Common jQuery DOM manipulation
+        var xml = $.parseXML(
+          '<?xml version="1.0">' +
+          '<contacts>' +
+          '<contact><id>123</id><name>Alice</name></contact>' +
+          '<contact><id>456</id><name>Bob</name></contact>' +
+          '</contacts>'
+        );
+        return _.map($(xml).find('contact'), function(contact) {
+          var $contact = $(contact);
+          return {
+            id: parseInt($contact.find('id').text()),
+            name: $contact.find('name').text()
+          };
+        });
       },
 
       contact_pre_post_pre_poll: function(bundle) {
@@ -139,6 +214,178 @@ const legacyScriptingSource = `
         var contacts = z.JSON.parse(bundle.response.content);
         contacts[0].name = 'Patched by KEY_pre_poll & KEY_post_poll!';
         return contacts;
+      },
+
+      movie_pre_poll_default_headers: function(bundle) {
+        // Copy Accept and Content-Type to params so we know they're already
+        // available in pre_poll
+        bundle.request.url = '${HTTPBIN_URL}/get';
+        bundle.request.params.accept = bundle.request.headers.Accept;
+        bundle.request.params.contentType = bundle.request.headers['Content-Type'];
+        return bundle.request;
+      },
+
+      movie_pre_poll_dynamic_dropdown: function(bundle) {
+        bundle.request.method = 'POST';
+        bundle.request.url = '${HTTPBIN_URL}/post';
+
+        // bundle.trigger_fields should be the values of the input fields of the
+        // action/search/trigger that pulls the dynamic dropdown. Send it to
+        // httpbin via request.data so we can check the response later.
+        bundle.request.data = z.JSON.stringify(bundle.trigger_fields);
+        return bundle.request;
+      },
+
+      movie_pre_poll_null_request_data: function(bundle) {
+        bundle.request.url = '${HTTPBIN_URL}/get';
+        bundle.request.params.requestDataIsNull =
+          bundle.request.data === null ? 'yes' : 'no';
+        return bundle.request;
+      },
+
+      movie_pre_poll_bundle_meta: function(bundle) {
+        bundle.request.method = 'POST';
+        bundle.request.url = '${HTTPBIN_URL}/post';
+        bundle.request.data = z.JSON.stringify(bundle.meta);
+        return bundle.request;
+      },
+
+      movie_pre_poll_request_options: function(bundle) {
+        bundle.request.method = 'POST';
+        bundle.request.url = '${HTTPBIN_URL}/post';
+        bundle.request.headers.foo = '1234';
+        bundle.request.params.bar = '5678';
+        bundle.request.data = '{"aa":"bb"}';
+        return bundle.request;
+      },
+
+      movie_pre_poll_invalid_chars_in_headers: function(bundle) {
+        bundle.request.headers['x-api-key'] = ' \\t\\n\\r H\\t E \\nY \\r\\n\\t ';
+        bundle.request.url = '${HTTPBIN_URL}/get';
+        return bundle.request;
+      },
+
+      movie_pre_poll_number_header: function(bundle) {
+        bundle.request.headers['x-api-key'] = Math.floor( Date.now() / 1000 )
+        bundle.request.url = '${HTTPBIN_URL}/get';
+        return bundle.request;
+      },
+
+      movie_pre_poll_urlencode: function(bundle) {
+        bundle.request.url = '${AUTH_JSON_SERVER_URL}/echo?url=' + encodeURIComponent('https://example.com');
+        return bundle.request;
+      },
+
+      getMovesUrl: function() {
+        return '${AUTH_JSON_SERVER_URL}/movies';
+      },
+
+      movie_pre_poll_this_binding: function(bundle) {
+        // 'this' should be bound to 'Zap'
+        bundle.request.url = this.getMovesUrl();
+        return bundle.request;
+      },
+
+      movie_pre_poll_error: function(bundle) {
+        var foo;
+        foo.bar = 1;
+        return bundle.request;
+      },
+
+      movie_pre_poll_GET_with_body: function(bundle) {
+        // Use postman-echo because httpbin doesn't echo a GET request's body
+        bundle.request.url = '${AUTH_JSON_SERVER_URL}/echo';
+        bundle.request.method = 'GET';
+        bundle.request.data = JSON.stringify({
+          name: 'Luke Skywalker'
+        });
+        return bundle.request;
+      },
+
+      movie_pre_poll_GET_with_empty_body: function(bundle) {
+        bundle.request.url = '${AUTH_JSON_SERVER_URL}/echo';
+        return bundle.request;
+      },
+
+      movie_pre_poll_non_ascii_url: function(bundle) {
+        bundle.request.url = '${AUTH_JSON_SERVER_URL}/中文';
+        return bundle.request;
+      },
+
+      movie_pre_poll_env_var: function(bundle) {
+        bundle.request.url = '{{process.env.SECRET_HTTPBIN_URL}}/get?a=1&a=1';
+        bundle.request.params.a = [2, 2];
+        return bundle.request;
+      },
+
+      movie_pre_poll_double_headers: function(bundle) {
+        bundle.request.url = '${HTTPBIN_URL}/get';
+        bundle.request.headers = {
+          'x-api-key': 'two',
+          'X-API-KEY': 'three'
+        };
+        return bundle.request;
+      },
+
+      movie_pre_poll_merge_query_params: function(bundle) {
+        bundle.request.url = '${HTTPBIN_URL}/get?title[]=null';
+        bundle.request.params['title[]'] = ['dune', 'eternals'];
+        return bundle.request;
+      },
+
+      movie_pre_poll_stop_request: function(bundle) {
+        throw new StopRequestException("don't do it");
+      },
+
+      movie_post_poll_request_options: function(bundle) {
+        // To make sure bundle.request is still available in post_poll
+        return [bundle.request];
+      },
+
+      movie_post_poll_make_array: function(bundle) {
+        return [z.JSON.parse(bundle.response.content)];
+      },
+
+      movie_post_poll_z_request_auth: function(bundle) {
+        var response = z.request({
+          url: '${HTTPBIN_URL}/get',
+          auth: {
+            bearer: bundle.auth_fields.api_key
+          }
+        });
+        var data = z.JSON.parse(response.content);
+        var authHeader = data.headers.Authorization;
+        return z.JSON.parse(bundle.response.content).map(function(movie) {
+          movie.authHeader = authHeader;
+          return movie;
+        });
+      },
+
+      movie_poll_default_headers: function(bundle) {
+        // Copy Accept and Content-Type to params so we know they're already
+        // available in pre_poll
+        bundle.request.url = '${HTTPBIN_URL}/get';
+        bundle.request.params.accept = bundle.request.headers.Accept;
+        bundle.request.params.contentType = bundle.request.headers['Content-Type'];
+
+        var response = z.request(bundle.request);
+        return [z.JSON.parse(response.content)];
+      },
+
+      movie_poll_stop_request: function(bundle) {
+        throw new StopRequestException('stop');
+      },
+
+      movie_poll_z_request_uri: function(bundle) {
+        var response = z.request({ uri: '${HTTPBIN_URL}/get', method: 'get' });
+        return [z.JSON.parse(response.content)];
+      },
+
+      recipe_pre_poll_underscore_template: function(bundle) {
+        bundle.request.url = _.template(bundle.request.url, {
+          urlPath: '/recipes'
+        });
+        return bundle.request;
       },
 
       /*
@@ -159,6 +406,20 @@ const legacyScriptingSource = `
           contact.luckyNumber = contact.id * 10;
         }
         return results;
+      },
+
+      contact_hook_scripting_catch_hook_raw_request: function(bundle) {
+        // Make sure bundle.request is kept intact
+        return {
+          id: 1,
+          headers: bundle.request.headers,
+          querystring: bundle.request.querystring,
+          content: bundle.request.content
+        };
+      },
+
+      contact_hook_scripting_catch_hook_stop_request: function(bundle) {
+        throw new StopRequestException('stop');
       },
 
       // To be replaced with 'contact_hook_scripting_pre_hook' at runtime to enable
@@ -198,6 +459,10 @@ const legacyScriptingSource = `
         data.bundleTargetUrl = bundle.target_url;
         data.bundleEvent = bundle.event;
         data.bundleZap = bundle.zap;
+        data.bundleTriggerData = bundle.trigger_data;
+
+        // Old alias for bundle.target_url
+        data.bundleSubscriptionUrl = bundle.subscription_url;
 
         bundle.request.data = z.JSON.stringify(data);
         return bundle.request;
@@ -207,6 +472,7 @@ const legacyScriptingSource = `
         // This will go to bundle.subscribe_data in pre_unsubscribe
         var data = z.JSON.parse(bundle.response.content);
         data.hiddenMessage = 'post_subscribe was here!';
+        data.bundleTriggerData2 = bundle.trigger_data;
         return data;
       },
 
@@ -221,6 +487,9 @@ const legacyScriptingSource = `
         data.bundleSubscribeData = bundle.subscribe_data;
         data.bundleEvent = bundle.event;
         data.bundleZap = bundle.zap;
+
+        // Old alias for bundle.target_url
+        data.bundleSubscriptionUrl = bundle.subscription_url;
 
         bundle.request.data = z.JSON.stringify(data);
         bundle.request.method = 'DELETE';
@@ -271,6 +540,13 @@ const legacyScriptingSource = `
         });
       },
 
+      movie_post_poll_header_case: function(bundle) {
+        var movies = z.JSON.parse(bundle.response.content);
+        var contentType = bundle.response.headers['CONTENT-type'];
+        movies[0].contentType = contentType;
+        return movies;
+      },
+
       /*
        * Create/Action
        */
@@ -293,7 +569,20 @@ const legacyScriptingSource = `
       movie_pre_write_unflatten: function(bundle) {
         // Make sure bundle.action_fields is unflatten, bundle.action_fields_full
         // isn't, and bundle.action_fields_raw still got curlies
-        bundle.request.url = 'https://httpbin.zapier-tooling.com/post';
+        bundle.request.url = '${HTTPBIN_URL}/post';
+        bundle.request.data = z.JSON.stringify({
+          action_fields: bundle.action_fields,
+          action_fields_full: bundle.action_fields_full,
+          action_fields_raw: bundle.action_fields_raw,
+          orig_data: z.JSON.parse(bundle.request.data)
+        });
+        return bundle.request;
+      },
+
+      movie_pre_write_action_fields: function(bundle) {
+        // Make sure bundle.action_fields is filtered, bundle.action_fields_full
+        // isn't, and bundle.action_fields_raw still got curlies
+        bundle.request.url = '${HTTPBIN_URL}/post';
         bundle.request.data = z.JSON.stringify({
           action_fields: bundle.action_fields,
           action_fields_full: bundle.action_fields_full,
@@ -314,6 +603,114 @@ const legacyScriptingSource = `
         (14).sailing = 'home';
 
         return data;
+      },
+
+      movie_post_write_require: function(bundle) {
+        return qs.parse('title=Joker&year=2019');
+      },
+
+      movie_post_write_returning_nothing: function(bundle) {},
+
+      movie_post_write_returning_string: function(bundle) {
+        return 'ok';
+      },
+
+      movie_pre_write_intercept_error: function(bundle) {
+        bundle.request.url = '${HTTPBIN_URL}/status/418';
+        return bundle.request;
+      },
+
+      movie_post_write_intercept_error: function(bundle) {
+        if (bundle.response.status_code == 418) {
+          throw new ErrorException('teapot here, go find a coffee machine');
+        }
+        return z.JSON.parse(bundle.response.content);
+      },
+
+      movie_post_write_bad_code: function(bundle) {
+        throw new TypeError("You shouldn't see this if bundle.response is an error");
+      },
+
+      movie_pre_write_default_headers: function(bundle) {
+        // Copy Accept and Content-Type to request body so we know they're
+        // already available in pre_write
+        bundle.request.url = '${HTTPBIN_URL}/post';
+        bundle.request.data = z.JSON.stringify({
+          accept: bundle.request.headers.Accept,
+          contentType: bundle.request.headers['Content-Type']
+        });
+        return bundle.request;
+      },
+
+      recipe_pre_write_underscore_template: function(bundle) {
+        var url = _.template(bundle.url_raw, {
+          urlPath: bundle.action_fields_full.urlPath
+        });
+        return {
+          method: 'POST',
+          url: url,
+          headers: bundle.request.headers,
+          data: bundle.request.data
+        };
+      },
+
+      movie_pre_write_request_fallback: function(bundle) {
+        // The remaining request options should fall back to bundle.request
+        return {
+          url: bundle.request.url + 's'
+        };
+      },
+
+      movie_pre_write_no_content: function(bundle) {
+        bundle.request.url = '${HTTPBIN_URL}/status/204';
+        return bundle.request;
+      },
+
+      movie_pre_write_request_data_empty_string: function(bundle) {
+        bundle.request.url = '${AUTH_JSON_SERVER_URL}/echo';
+        bundle.request.data = '';
+        return bundle.request;
+      },
+
+      movie_pre_write_prune_empty_params: function(bundle) {
+        bundle.request.url = '${HTTPBIN_URL}/post?foo=&bar=';
+        bundle.request.params.foo = undefined;
+        bundle.request.params.bar = null;
+        bundle.request.params.baz = '';
+        bundle.request.params.apple = undefined;
+        bundle.request.params.banana = null;
+        return bundle.request;
+      },
+
+      movie_pre_write_data_is_object: function(bundle) {
+        bundle.request.url = '${AUTH_JSON_SERVER_URL}/echo';
+        bundle.request.data = {
+          foo: 'bar',
+          apple: 123,
+          banana: null,
+          dragonfruit: '&=',
+          eggplant: [1.11, 2.22, null],
+          filbert: true,
+          nest: {foo: 'bar', 'hello': {world: [1.1, 2.2]}},
+          empty_object: {},
+          empty_array: []
+        };
+        return bundle.request;
+      },
+
+      movie_pre_write_stop_request: function(bundle) {
+        throw new StopRequestException('stop');
+      },
+
+      movie_write_default_headers: function(bundle) {
+        bundle.request.url = '${HTTPBIN_URL}/post';
+        bundle.request.data = z.JSON.stringify({
+          accept: bundle.request.headers.Accept,
+          contentType: bundle.request.headers['Content-Type']
+        });
+
+        var response = z.request(bundle.request);
+        return z.JSON.parse(response.content);
       },
 
       // To be replaced with 'movie_write' at runtime
@@ -341,9 +738,33 @@ const legacyScriptingSource = `
         });
       },
 
+      movie_write_json_true: function(bundle) {
+        var data = z.JSON.parse(bundle.request.data);
+        data.hello = 'world';
+        var response = z.request({
+          method: 'POST',
+          url: '${HTTPBIN_URL}/post',
+          json: true,
+          body: data
+        });
+        return response.content;
+      },
+
+      movie_write_stop_request: function(bundle) {
+        throw new StopRequestException('nothing for you');
+      },
+
       // To be replaced with 'movie_pre_custom_action_fields' at runtime
       movie_pre_custom_action_fields_disabled: function(bundle) {
         bundle.request.url += 's';
+        return bundle.request;
+      },
+
+      movie_pre_custom_action_fields_empty_request_data: function(bundle) {
+        if (!bundle.request.data) {
+          // Should reach here
+          bundle.request.url += 's';
+        }
         return bundle.request;
       },
 
@@ -358,6 +779,19 @@ const legacyScriptingSource = `
         return fields;
       },
 
+      movie_post_custom_action_fields_dict_field: function(bundle) {
+        var fields = z.JSON.parse(bundle.response.content);
+        fields.push({
+          key: 'attrs',
+          label: 'Attributes',
+          type: 'dict',
+          list: true
+        });
+        return fields;
+      },
+
+      movie_post_custom_action_fields_returning_nothing: function(bundle) {},
+
       // To be replaced with 'movie_custom_action_fields' at runtime
       movie_custom_action_fields_disabled: function(bundle) {
         // bundle.request.url should be an empty string to start with
@@ -370,6 +804,15 @@ const legacyScriptingSource = `
           type: 'int'
         });
         return fields;
+      },
+
+      // Make sure we respect WB's preset _.template settings
+      recipe_pre_custom_action_fields_underscore_template: function(bundle) {
+        return {
+          method: 'GET',
+          url: _.template(bundle.raw_url, { urlPath: bundle.action_fields.urlPath }),
+          headers: bundle.request.headers,
+        };
       },
 
       // To be replaced with 'movie_pre_custom_action_result_fields' at runtime
@@ -434,7 +877,7 @@ const legacyScriptingSource = `
 
       // To be replaced with 'file_pre_write' at runtime
       file_pre_write_fully_replace_url: function(bundle) {
-        bundle.request.files.file = 'https://httpbin.zapier-tooling.com/image/jpeg';
+        bundle.request.files.file = '${HTTPBIN_URL}/image/jpeg';
         return bundle.request;
       },
 
@@ -446,22 +889,66 @@ const legacyScriptingSource = `
 
       file_pre_write_content_dispoistion_with_quotes: function(bundle) {
         bundle.request.files.file =
-          'https://httpbin.zapier-tooling.com/response-headers?' +
+          '${HTTPBIN_URL}/response-headers?' +
           'Content-Disposition=filename=%22an%20example.json%22';
         return bundle.request;
       },
 
       file_pre_write_content_dispoistion_no_quotes: function(bundle) {
         bundle.request.files.file =
-          'https://httpbin.zapier-tooling.com/response-headers?' +
+          '${HTTPBIN_URL}/response-headers?' +
           'Content-Disposition=filename=example.json';
         return bundle.request;
       },
 
       file_pre_write_content_dispoistion_non_ascii: function(bundle) {
         bundle.request.files.file =
-          'https://httpbin.zapier-tooling.com/response-headers?' +
+          '${HTTPBIN_URL}/response-headers?' +
           'Content-Disposition=filename*=UTF-8%27%27%25E4%25B8%25AD%25E6%2596%2587.json';
+        return bundle.request;
+      },
+
+      file_pre_write_wrong_content_type: function(bundle) {
+        // Files should always be sent as multipart/form-data, no matter what
+        // the developer sets here
+        bundle.request.headers['Content-Type'] = 'applicaiton/x-www-form-urlencoded';
+        bundle.request.data = z.JSON.parse(bundle.request.data);
+        return bundle.request;
+      },
+
+      file2_pre_write_rename_file_field: function(bundle) {
+        bundle.request.files = {
+          file: bundle.request.files.file_1
+        };
+        return bundle.request;
+      },
+
+      file_pre_write_optional_file_field: function(bundle) {
+        if (_.isEmpty(bundle.request.files)) {
+          // Reach here when the optional file field is empty
+          bundle.request.headers['Content-Type'] = 'application/json';
+          bundle.request.url = '${HTTPBIN_URL}/post';
+          return bundle.request;
+        } else {
+          // Reach here when the optional file field is filled
+          bundle.request.headers['Content-Type'] = 'application/x-www-form-urlencoded';
+          bundle.request.data = JSON.parse(bundle.request.data);
+          return bundle.request;
+        }
+      },
+
+      file_pre_write_cancel_multipart: function(bundle) {
+        var file = bundle.request.files.file;
+        var data = z.JSON.parse(bundle.request.data);
+        data.file = file;
+
+        bundle.request.url = '${HTTPBIN_URL}/post';
+
+        // This should make legacy-scripting-runner switch from multipart to
+        // JSON body
+        bundle.request.files = {};
+        bundle.request.data = z.JSON.stringify(data);
+
         return bundle.request;
       },
 
@@ -473,6 +960,10 @@ const legacyScriptingSource = `
       movie_pre_search_disabled: function(bundle) {
         bundle.request.url = bundle.request.url.replace('movie?', 'movies?');
         return bundle.request;
+      },
+
+      movie_pre_search_stop_request: function(bundle) {
+        throw new StopRequestException("don't do it");
       },
 
       // To be replaced with 'movie_post_search' at runtime
@@ -491,6 +982,10 @@ const legacyScriptingSource = `
         return results;
       },
 
+      movie_search_stop_request: function(bundle) {
+        throw new StopRequestException('nothing for you');
+      },
+
       // To be replaced with 'movie_pre_read_resource' at runtime
       movie_pre_read_resource_disabled: function(bundle) {
         // Replace '/movie/123' with '/movies/123'
@@ -505,6 +1000,11 @@ const legacyScriptingSource = `
         movie.title += ' (movie_post_read_resource was here)';
         movie.anotherId = bundle.read_fields.id;
         return movie;
+      },
+
+      movie_post_read_resource_array: function(bundle) {
+        // WB would take the first item if the result is an array
+        return [{rating: 'PG', year: 2020}];
       },
 
       movie_read_resource_disabled: function(bundle) {
@@ -584,151 +1084,166 @@ const legacyScriptingSource = `
     };
 `;
 
-const ContactTrigger_full = {
+const contactTriggerFull = {
   key: 'contact_full',
   noun: 'Contact',
   display: {
-    label: 'New Contact with Full Scripting'
+    label: 'New Contact with Full Scripting',
   },
   operation: {
     perform: {
-      source: "return z.legacyScripting.run(bundle, 'trigger', 'contact_full');"
+      source:
+        "return z.legacyScripting.run(bundle, 'trigger', 'contact_full');",
     },
     outputFields: [
       {
         key: 'id',
         label: 'ID',
-        type: 'integer'
+        type: 'integer',
       },
       {
         key: 'name',
         label: 'Name',
-        type: 'string'
+        type: 'string',
       },
       {
         source:
-          "return z.legacyScripting.run(bundle, 'trigger.output', 'contact_full');"
-      }
-    ]
-  }
+          "return z.legacyScripting.run(bundle, 'trigger.output', 'contact_full');",
+      },
+    ],
+  },
 };
 
-const ContactTrigger_pre = {
+const contactTriggerPre = {
   key: 'contact_pre',
   noun: 'Contact',
   display: {
-    label: 'New Contact with Pre Scripting'
+    label: 'New Contact with Pre Scripting',
   },
   operation: {
     perform: {
-      source: "return z.legacyScripting.run(bundle, 'trigger', 'contact_pre');"
-    }
-  }
+      source: "return z.legacyScripting.run(bundle, 'trigger', 'contact_pre');",
+    },
+  },
 };
 
-const ContactTrigger_post = {
+const contactTriggerPost = {
   key: 'contact_post',
   noun: 'Contact',
   display: {
-    label: 'New Contact with Post Scripting'
+    label: 'New Contact with Post Scripting',
   },
   operation: {
     perform: {
-      source: "return z.legacyScripting.run(bundle, 'trigger', 'contact_post');"
-    }
-  }
+      source:
+        "return z.legacyScripting.run(bundle, 'trigger', 'contact_post');",
+    },
+  },
 };
 
-const ContactTrigger_pre_post = {
+const contactTriggerPrePost = {
   key: 'contact_pre_post',
   noun: 'Contact',
   display: {
-    label: 'New Contact with Pre & Post Scripting'
+    label: 'New Contact with Pre & Post Scripting',
   },
   operation: {
     perform: {
       source:
-        "return z.legacyScripting.run(bundle, 'trigger', 'contact_pre_post');"
-    }
-  }
+        "return z.legacyScripting.run(bundle, 'trigger', 'contact_pre_post');",
+    },
+  },
 };
 
-const ContactHook_scriptingless = {
+const contactHookScriptingless = {
   key: 'contact_hook_scriptingless',
   noun: 'Contact',
   display: {
-    label: 'Contact Hook without Scripting'
+    label: 'Contact Hook without Scripting',
   },
   operation: {
     perform: {
       source:
-        "return z.legacyScripting.run(bundle, 'trigger.hook', 'contact_hook_scriptingless');"
-    }
-  }
+        "return z.legacyScripting.run(bundle, 'trigger.hook', 'contact_hook_scriptingless');",
+    },
+  },
 };
 
-const ContactHook_scripting = {
+const contactHookScripting = {
   key: 'contact_hook_scripting',
   noun: 'Contact',
   display: {
-    label: 'Contact Hook with KEY_catch_hook Scripting'
+    label: 'Contact Hook with KEY_catch_hook Scripting',
   },
   operation: {
     perform: {
       source:
-        "return z.legacyScripting.run(bundle, 'trigger.hook', 'contact_hook_scripting');"
+        "return z.legacyScripting.run(bundle, 'trigger.hook', 'contact_hook_scripting');",
     },
     performSubscribe: {
       source:
-        "return z.legacyScripting.run(bundle, 'trigger.hook.subscribe', 'contact_hook_scripting');"
+        "return z.legacyScripting.run(bundle, 'trigger.hook.subscribe', 'contact_hook_scripting');",
     },
     performUnsubscribe: {
       source:
-        "return z.legacyScripting.run(bundle, 'trigger.hook.unsubscribe', 'contact_hook_scripting');"
-    }
-  }
+        "return z.legacyScripting.run(bundle, 'trigger.hook.unsubscribe', 'contact_hook_scripting');",
+    },
+  },
 };
 
 const TestTrigger = {
   key: 'test',
   display: {
-    label: 'Test Auth'
+    label: 'Test Auth',
   },
   operation: {
     perform: {
-      source: "return z.legacyScripting.run(bundle, 'trigger', 'test');"
-    }
-  }
+      source: "return z.legacyScripting.run(bundle, 'trigger', 'test');",
+    },
+  },
 };
 
 const MovieTrigger = {
   key: 'movie',
   display: {
-    label: 'New Movie'
+    label: 'New Movie',
   },
   operation: {
     perform: {
-      source: "return z.legacyScripting.run(bundle, 'trigger', 'movie');"
-    }
-  }
+      source: "return z.legacyScripting.run(bundle, 'trigger', 'movie');",
+    },
+  },
+};
+
+const RecipeTrigger = {
+  key: 'recipe',
+  display: {
+    label: 'New Recipe',
+  },
+  operation: {
+    perform: {
+      source: "return z.legacyScripting.run(bundle, 'trigger', 'recipe');",
+    },
+  },
 };
 
 const MovieCreate = {
   key: 'movie',
   noun: 'Movie',
   display: {
-    label: 'Create a Movie'
+    label: 'Create a Movie',
   },
   operation: {
     perform: {
-      source: "return z.legacyScripting.run(bundle, 'create', 'movie');"
+      source: "return z.legacyScripting.run(bundle, 'create', 'movie');",
     },
     inputFields: [
       { key: 'title', label: 'Title', type: 'string' },
       { key: 'genre', label: 'Genre', type: 'string' },
       {
-        source: "return z.legacyScripting.run(bundle, 'create.input', 'movie');"
-      }
+        source:
+          "return z.legacyScripting.run(bundle, 'create.input', 'movie');",
+      },
     ],
     outputFields: [
       { key: 'id', label: 'ID', type: 'integer' },
@@ -736,49 +1251,96 @@ const MovieCreate = {
       { key: 'genre', label: 'Genre', type: 'string' },
       {
         source:
-          "return z.legacyScripting.run(bundle, 'create.output', 'movie');"
-      }
-    ]
-  }
+          "return z.legacyScripting.run(bundle, 'create.output', 'movie');",
+      },
+    ],
+  },
 };
 
 const FileUpload = {
   key: 'file',
   noun: 'File',
   display: {
-    label: 'Upload a File'
+    label: 'Upload a File',
   },
   operation: {
     perform: {
-      source: "return z.legacyScripting.run(bundle, 'create', 'file');"
+      source: "return z.legacyScripting.run(bundle, 'create', 'file');",
     },
     inputFields: [
       { key: 'filename', label: 'Filename', type: 'string' },
-      { key: 'file', label: 'File', type: 'file' }
+      { key: 'file', label: 'File', type: 'file' },
+      { key: 'yes', label: 'Yes', type: 'boolean' },
     ],
-    outputFields: [{ key: 'id', label: 'ID', type: 'integer' }]
-  }
+    outputFields: [{ key: 'id', label: 'ID', type: 'integer' }],
+  },
+};
+
+const FileUpload2 = {
+  key: 'file2',
+  noun: 'File',
+  display: {
+    label: 'Upload a File 2',
+  },
+  operation: {
+    perform: {
+      source: "return z.legacyScripting.run(bundle, 'create', 'file2');",
+    },
+    inputFields: [
+      { key: 'id', label: 'ID', type: 'string' },
+      { key: 'name', label: 'Name', type: 'string' },
+      { key: 'file_1', label: 'File', type: 'file' },
+    ],
+    outputFields: [{ key: 'id', label: 'ID', type: 'integer' }],
+  },
+};
+
+const RecipeCreate = {
+  key: 'recipe',
+  noun: 'Recipe',
+  display: {
+    label: 'Create a Recipe',
+  },
+  operation: {
+    perform: {
+      source: "return z.legacyScripting.run(bundle, 'create', 'recipe');",
+    },
+    inputFields: [
+      { key: 'name', label: 'Name', type: 'string' },
+      { key: 'directions', label: 'Directions', type: 'string' },
+      {
+        source:
+          "return z.legacyScripting.run(bundle, 'create.input', 'recipe');",
+      },
+    ],
+    outputFields: [
+      { key: 'id', label: 'ID', type: 'integer' },
+      { key: 'name', label: 'Name', type: 'string' },
+      { key: 'directions', label: 'directions', type: 'string' },
+    ],
+  },
 };
 
 const MovieSearch = {
   key: 'movie',
   noun: 'Movie',
   display: {
-    label: 'Find a Movie'
+    label: 'Find a Movie',
   },
   operation: {
     perform: {
-      source: "return z.legacyScripting.run(bundle, 'search', 'movie');"
+      source: "return z.legacyScripting.run(bundle, 'search', 'movie');",
     },
     performGet: {
       source:
-        "return z.legacyScripting.run(bundle, 'search.resource', 'movie');"
+        "return z.legacyScripting.run(bundle, 'search.resource', 'movie');",
     },
     inputFields: [
       { key: 'query', label: 'Query', type: 'string' },
       {
-        source: "return z.legacyScripting.run(bundle, 'search.input', 'movie');"
-      }
+        source:
+          "return z.legacyScripting.run(bundle, 'search.input', 'movie');",
+      },
     ],
     outputFields: [
       { key: 'id', label: 'ID', type: 'integer' },
@@ -786,51 +1348,77 @@ const MovieSearch = {
       { key: 'genre', label: 'Genre', type: 'string' },
       {
         source:
-          "return z.legacyScripting.run(bundle, 'search.output', 'movie');"
-      }
-    ]
-  }
+          "return z.legacyScripting.run(bundle, 'search.output', 'movie');",
+      },
+    ],
+  },
 };
+
+const beforeRequestSource = `
+  return z.legacyScripting.beforeRequest(request, z, bundle);
+`;
+
+const afterResponseSource = `
+  return z.legacyScripting.afterResponse(response, z, bundle);
+`;
 
 const App = {
   title: 'Example App',
   triggers: {
-    [ContactTrigger_full.key]: ContactTrigger_full,
-    [ContactTrigger_pre.key]: ContactTrigger_pre,
-    [ContactTrigger_post.key]: ContactTrigger_post,
-    [ContactTrigger_pre_post.key]: ContactTrigger_pre_post,
-    [ContactHook_scriptingless.key]: ContactHook_scriptingless,
-    [ContactHook_scripting.key]: ContactHook_scripting,
+    [contactTriggerFull.key]: contactTriggerFull,
+    [contactTriggerPre.key]: contactTriggerPre,
+    [contactTriggerPost.key]: contactTriggerPost,
+    [contactTriggerPrePost.key]: contactTriggerPrePost,
+    [contactHookScriptingless.key]: contactHookScriptingless,
+    [contactHookScripting.key]: contactHookScripting,
     [TestTrigger.key]: TestTrigger,
-    [MovieTrigger.key]: MovieTrigger
+    [MovieTrigger.key]: MovieTrigger,
+    [RecipeTrigger.key]: RecipeTrigger,
   },
   creates: {
     [MovieCreate.key]: MovieCreate,
-    [FileUpload.key]: FileUpload
+    [RecipeCreate.key]: RecipeCreate,
+    [FileUpload.key]: FileUpload,
+    [FileUpload2.key]: FileUpload2,
   },
   searches: {
-    [MovieSearch.key]: MovieSearch
+    [MovieSearch.key]: MovieSearch,
   },
   hydrators: {
     legacyMethodHydrator: {
-      source: "return z.legacyScripting.run(bundle, 'hydrate.method');"
+      source: "return z.legacyScripting.run(bundle, 'hydrate.method');",
     },
     legacyFileHydrator: {
-      source: "return z.legacyScripting.run(bundle, 'hydrate.file');"
-    }
+      source: "return z.legacyScripting.run(bundle, 'hydrate.file');",
+    },
   },
+  // This breaks `applyBeforeMiddleware` which it looks like gets the original definition without `findSourceRequireFunctions` applied?!
+  beforeRequest: [
+    {
+      source: beforeRequestSource,
+      args: ['request', 'z', 'bundle'],
+    },
+  ],
+  afterResponse: [
+    {
+      source: afterResponseSource,
+      args: ['response', 'z', 'bundle'],
+    },
+  ],
   legacy: {
     scriptingSource: legacyScriptingSource,
 
-    subscribeUrl: 'https://httpbin.zapier-tooling.com/post',
-    unsubscribeUrl: 'https://httpbin.zapier-tooling.com/delete',
+    subscribeUrl: `${HTTPBIN_URL}/post`,
+    unsubscribeUrl: `${HTTPBIN_URL}/delete?sub_id={{subscription_id}}`,
 
     authentication: {
       oauth2Config: {
+        authorizeUrl: `${AUTH_JSON_SERVER_URL}/oauth/authorize`,
+
         // Incomplete URLs on purpose to test pre_oauthv2_token
         accessTokenUrl: `${AUTH_JSON_SERVER_URL}/oauth/access-`,
-        refreshTokenUrl: `${AUTH_JSON_SERVER_URL}/oauth/refresh-`
-      }
+        refreshTokenUrl: `${AUTH_JSON_SERVER_URL}/oauth/refresh-`,
+      },
     },
 
     triggers: {
@@ -839,30 +1427,36 @@ const App = {
           // The URL misses an 's' at the end of the resource names. That is,
           // 'output-field' where it should be 'output-fields'. Done purposely for
           // scripting to fix it.
-          outputFieldsUrl: `${AUTH_JSON_SERVER_URL}/output-field`
-        }
+          outputFieldsUrl: `${AUTH_JSON_SERVER_URL}/output-field`,
+        },
       },
       contact_post: {
         operation: {
-          url: `${AUTH_JSON_SERVER_URL}/users`
-        }
+          url: `${AUTH_JSON_SERVER_URL}/users`,
+        },
       },
       contact_hook_scripting: {
         operation: {
           event: 'contact.created',
-          hookType: 'rest'
-        }
+          hookType: 'rest',
+        },
       },
       test: {
         operation: {
-          url: `${AUTH_JSON_SERVER_URL}/me`
-        }
+          url: `${AUTH_JSON_SERVER_URL}/me`,
+        },
       },
       movie: {
         operation: {
-          url: `${AUTH_JSON_SERVER_URL}/movies`
-        }
-      }
+          url: `${AUTH_JSON_SERVER_URL}/movies`,
+        },
+      },
+      recipe: {
+        operation: {
+          url: `${AUTH_JSON_SERVER_URL}{{bundle.inputData.urlPath}}`,
+          outputFieldsUrl: `${AUTH_JSON_SERVER_URL}{{bundle.inputData.urlPath}}`,
+        },
+      },
     },
 
     creates: {
@@ -874,14 +1468,25 @@ const App = {
           url: `${AUTH_JSON_SERVER_URL}/movie`,
           inputFieldsUrl: `${AUTH_JSON_SERVER_URL}/input-field`,
           outputFieldsUrl: `${AUTH_JSON_SERVER_URL}/output-field`,
-          fieldsExcludedFromBody: ['title']
-        }
+          fieldsExcludedFromBody: ['title'],
+        },
+      },
+      recipe: {
+        operation: {
+          url: `${AUTH_JSON_SERVER_URL}{{bundle.inputData.urlPath}}`,
+          inputFieldsUrl: `${AUTH_JSON_SERVER_URL}{{bundle.inputData.urlPath}}`,
+        },
       },
       file: {
         operation: {
-          url: `${AUTH_JSON_SERVER_URL}/upload`
-        }
-      }
+          url: `${AUTH_JSON_SERVER_URL}/upload`,
+        },
+      },
+      file2: {
+        operation: {
+          url: `${AUTH_JSON_SERVER_URL}/upload`,
+        },
+      },
     },
 
     searches: {
@@ -893,11 +1498,11 @@ const App = {
           url: `${AUTH_JSON_SERVER_URL}/movie?q={{bundle.inputData.query}}`,
           resourceUrl: `${AUTH_JSON_SERVER_URL}/movie/{{bundle.inputData.id}}`,
           inputFieldsUrl: `${AUTH_JSON_SERVER_URL}/input-field`,
-          outputFieldsUrl: `${AUTH_JSON_SERVER_URL}/output-field`
-        }
-      }
-    }
-  }
+          outputFieldsUrl: `${AUTH_JSON_SERVER_URL}/output-field`,
+        },
+      },
+    },
+  },
 };
 
 module.exports = App;

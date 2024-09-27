@@ -10,15 +10,15 @@ const commandHandlers = {
   execute,
   validate: schemaTools.validateApp,
   definition: schemaTools.serializeApp,
-  request: (app, input) => executeRequest(input)
+  request: (app, input) => executeRequest(input),
 };
 
 /*
   Creates middleware app that can process z-app app definitions, handling
   commands like 'execute', 'validate', 'definition', 'request'.
 */
-const createCommandHandler = compiledApp => {
-  return input => {
+const createCommandHandler = (compiledApp) => {
+  return async (input) => {
     const command = input._zapier.event.command || 'execute'; // validate || definition || request
     const handler = commandHandlers[command];
     if (!handler) {
@@ -26,7 +26,7 @@ const createCommandHandler = compiledApp => {
     }
 
     try {
-      return handler(compiledApp, input);
+      return await handler(compiledApp, input);
     } catch (err) {
       return handleError(err);
     }

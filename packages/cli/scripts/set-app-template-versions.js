@@ -3,14 +3,14 @@
 const _ = require('lodash');
 const path = require('path');
 const tmp = require('tmp');
-const utils = require('../src/utils');
+const { promisifyAll } = require('../src/utils/promisify');
 const appTemplates = require('../src/app-templates');
 const versionStore = require('../src/version-store');
 
 const fse = require('fs-extra');
 const semver = require('semver');
 const yaml = require('yamljs');
-const childProcess = utils.promisifyAll(require('child_process'));
+const childProcess = promisifyAll(require('child_process'));
 
 const CLONE_URL_PREFIX = 'git@github.com:zapier/zapier-platform-example-app';
 const PACKAGES_NAMES = 'node, npm, and zapier-platform-core';
@@ -19,7 +19,7 @@ let packagesVersions;
 const newCoreVersion = process.argv[2];
 if (!newCoreVersion) {
   console.error('Usage: npm run set-template-version [NEW_CORE_VERSION]');
-  /*eslint no-process-exit: 0 */
+  /* eslint no-process-exit: 0 */
   process.exit(1);
 }
 
@@ -28,7 +28,7 @@ newVersions.coreVersion = newCoreVersion;
 
 const exec = (cmd, cwd) => {
   return new Promise((resolve, reject) => {
-    childProcess.exec(cmd, { cwd }, err => {
+    childProcess.exec(cmd, { cwd }, (err) => {
       if (err) {
         console.error('error:', err);
         reject(err);
@@ -53,9 +53,7 @@ const setVersion = (template, rootTmpDir) => {
   const repoDir = path.resolve(rootTmpDir, repoName);
   const cloneUrl = `${CLONE_URL_PREFIX}-${template}`;
   var cmd = `git clone ${cloneUrl}`;
-  packagesVersions = `${newVersions.nodeVersion}, ${
-    newVersions.npmVersion
-  }, and ${newVersions.coreVersion}`;
+  packagesVersions = `${newVersions.nodeVersion}, ${newVersions.npmVersion}, and ${newVersions.coreVersion}`;
 
   console.log(
     `Setting versions of ${PACKAGES_NAMES} to ${packagesVersions} respectively in ${template} app template.`
@@ -90,7 +88,7 @@ const setVersion = (template, rootTmpDir) => {
       travisYaml.node_js[0] = newVersions.nodeVersion;
       return fse.writeFile(travisYamlFile, yaml.stringify(travisYaml, null, 2));
     })
-    .then(result => {
+    .then((result) => {
       if (result === 'skip') {
         return result;
       }
@@ -98,7 +96,7 @@ const setVersion = (template, rootTmpDir) => {
       cmd = `git commit package.json .travis.yml -m "update ${PACKAGES_NAMES} versions to ${packagesVersions} respectively."`;
       return exec(cmd, repoDir);
     })
-    .then(result => {
+    .then((result) => {
       if (result === 'skip') {
         return result;
       }
@@ -106,7 +104,7 @@ const setVersion = (template, rootTmpDir) => {
       cmd = 'git push origin master';
       return exec(cmd, repoDir);
     })
-    .then(result => {
+    .then((result) => {
       if (result === 'skip') {
         console.log(
           `${template} is already set to ${packagesVersions} for ${PACKAGES_NAMES} respectively, skipping`
@@ -118,7 +116,7 @@ const setVersion = (template, rootTmpDir) => {
       );
       return null;
     })
-    .catch(err => {
+    .catch((err) => {
       console.error(
         `Error setting ${PACKAGES_NAMES} versions for app template ${template}:`,
         err
@@ -131,27 +129,27 @@ const rootTmpDir = tmp.tmpNameSync();
 fse.removeSync(rootTmpDir);
 fse.ensureDirSync(rootTmpDir);
 
-const tasks = _.map(appTemplates, template => setVersion(template, rootTmpDir));
+const tasks = _.map(appTemplates, (template) =>
+  setVersion(template, rootTmpDir)
+);
 
-Promise.all(tasks).then(results => {
+Promise.all(tasks).then((results) => {
   const failures = _.filter(
     results,
-    result => result !== null && result !== 'skip'
+    (result) => result !== null && result !== 'skip'
   );
-  const skipped = _.filter(results, result => result === 'skip');
+  const skipped = _.filter(results, (result) => result === 'skip');
   const successCount = tasks.length - failures.length - skipped.length;
 
   if (failures.length) {
     console.error(
-      'failed to set ${PACKAGES_NAMES} versions on these templates:',
+      `failed to set ${PACKAGES_NAMES} versions on these templates:`,
       failures.join(', ')
     );
   }
   if (skipped.length) {
     console.log(
-      `skipped ${
-        skipped.length
-      } templates because versions for ${PACKAGES_NAMES} were already set to ${packagesVersions} respectively`
+      `skipped ${skipped.length} templates because versions for ${PACKAGES_NAMES} were already set to ${packagesVersions} respectively`
     );
   }
   if (successCount) {

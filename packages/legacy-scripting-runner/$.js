@@ -1,15 +1,13 @@
-'use strict';
+const jQuery = require('jquery');
+const { DOMParser } = require('xmldom');
+const { jsdom } = require('jsdom');
 
-const cheerio = require('cheerio');
-const xmldom = require('xmldom');
+const window = jsdom().defaultView;
+window.DOMParser = DOMParser;
 
-const DOMParser = xmldom.DOMParser;
+const $ = jQuery(window);
 
-const $ = cheerio.load('<html></html>');
-
-$.param = require('jquery-param');
-
-$.parseXML = data => {
+$.parseXML = (data) => {
   if (!data || typeof data !== 'string') {
     return null;
   }

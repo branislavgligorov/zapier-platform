@@ -3,39 +3,37 @@ const subscribeHook = (z, bundle) => {
   z.console.log('console says hello world!');
 
   // bundle.targetUrl has the Hook URL this app should call when a recipe is created.
+  // https://platform.zapier.com/docs/advanced#targeturl
   const data = {
     url: bundle.targetUrl,
-    style: bundle.inputData.style
+    style: bundle.inputData.style,
   };
 
   // You can build requests and our client will helpfully inject all the variables
   // you need to complete. You can also register middleware to control this.
   const options = {
-    url: 'http://57b20fb546b57d1100a3c405.mockapi.io/api/hooks',
+    url: 'https://57b20fb546b57d1100a3c405.mockapi.io/api/hooks',
     method: 'POST',
-    body: JSON.stringify(data)
+    body: data,
   };
 
   // You may return a promise or a normal data structure from any perform method.
-  return z.request(options)
-    .then((response) => JSON.parse(response.content));
+  return z.request(options).then((response) => response.data);
 };
 
 const unsubscribeHook = (z, bundle) => {
-  // bundle.subscribeData contains the parsed response JSON from the subscribe
-  // request made initially.
+  // bundle.subscribeData contains the parsed response JSON from the subscribe request.
   const hookId = bundle.subscribeData.id;
 
   // You can build requests and our client will helpfully inject all the variables
   // you need to complete. You can also register middleware to control this.
   const options = {
-    url: `http://57b20fb546b57d1100a3c405.mockapi.io/api/hooks/${hookId}`,
+    url: `https://57b20fb546b57d1100a3c405.mockapi.io/api/hooks/${hookId}`,
     method: 'DELETE',
   };
 
   // You may return a promise or a normal data structure from any perform method.
-  return z.request(options)
-    .then((response) => JSON.parse(response.content));
+  return z.request(options).then((response) => response.data);
 };
 
 const getRecipe = (z, bundle) => {
@@ -47,7 +45,7 @@ const getRecipe = (z, bundle) => {
     directions: bundle.cleanedRequest.directions,
     style: bundle.cleanedRequest.style,
     authorId: bundle.cleanedRequest.authorId,
-    createdAt: bundle.cleanedRequest.createdAt
+    createdAt: bundle.cleanedRequest.createdAt,
   };
 
   return [recipe];
@@ -56,14 +54,13 @@ const getRecipe = (z, bundle) => {
 const getFallbackRealRecipe = (z, bundle) => {
   // For the test poll, you should get some real data, to aid the setup process.
   const options = {
-    url: 'http://57b20fb546b57d1100a3c405.mockapi.io/api/recipes/',
+    url: 'https://57b20fb546b57d1100a3c405.mockapi.io/api/recipes/',
     params: {
-      style: bundle.inputData.style
-    }
+      style: bundle.inputData.style,
+    },
   };
 
-  return z.request(options)
-    .then((response) => JSON.parse(response.content));
+  return z.request(options).then((response) => response.data);
 };
 
 // We recommend writing your triggers separate like this and rolling them
@@ -76,16 +73,19 @@ module.exports = {
   noun: 'Recipe',
   display: {
     label: 'New Recipe',
-    description: 'Trigger when a new recipe is added.'
+    description: 'Trigger when a new recipe is added.',
   },
 
   // `operation` is where the business logic goes.
   operation: {
-
     // `inputFields` can define the fields a user could provide,
     // we'll pass them in as `bundle.inputData` later.
     inputFields: [
-      {key: 'style', type: 'string', helpText: 'Which styles of cuisine this should trigger on.'}
+      {
+        key: 'style',
+        type: 'string',
+        helpText: 'Which styles of cuisine this should trigger on.',
+      },
     ],
 
     type: 'hook',
@@ -113,12 +113,12 @@ module.exports = {
     // outputFields: () => { return []; }
     // Alternatively, a static field definition should be provided, to specify labels for the fields
     outputFields: [
-      {key: 'id', label: 'ID'},
-      {key: 'createdAt', label: 'Created At'},
-      {key: 'name', label: 'Name'},
-      {key: 'directions', label: 'Directions'},
-      {key: 'authorId', label: 'Author ID'},
-      {key: 'style', label: 'Style'},
-    ]
-  }
+      { key: 'id', label: 'ID' },
+      { key: 'createdAt', label: 'Created At' },
+      { key: 'name', label: 'Name' },
+      { key: 'directions', label: 'Directions' },
+      { key: 'authorId', label: 'Author ID' },
+      { key: 'style', label: 'Style' },
+    ],
+  },
 };

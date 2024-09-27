@@ -8,11 +8,10 @@ const triggerIssue = (z, bundle) => {
       filter: bundle.inputData.filter,
       state: bundle.inputData.state,
       sort: 'updated',
-      direction: 'desc'
-    }
+      direction: 'desc',
+    },
   });
-  return responsePromise
-    .then(response => JSON.parse(response.content));
+  return responsePromise.then((response) => response.data);
 };
 
 module.exports = {
@@ -21,17 +20,40 @@ module.exports = {
 
   display: {
     label: 'Get Issue',
-    description: 'Triggers on a new issue.'
+    description: 'Triggers on a new issue.',
   },
 
   operation: {
     inputFields: [
-      {key: 'repo', label:'Repo', required: true, dynamic: 'repo.full_name.full_name'},
-      {key:'filter', required: false, label: 'Filter', choices: {assigned:'assigned',created:'created',mentioned:'mentioned',subscribed:'subscribed',all:'all'}, helpText:'Default is "assigned"'},
-      {key:'state', required: false, label: 'State', choices: {open:'open',closed:'closed',all:'all'}, helpText:'Default is "open"'}
+      {
+        key: 'repo',
+        label: 'Repo',
+        required: true,
+        dynamic: 'repo.full_name.full_name',
+      },
+      {
+        key: 'filter',
+        required: false,
+        label: 'Filter',
+        choices: {
+          assigned: 'assigned',
+          created: 'created',
+          mentioned: 'mentioned',
+          subscribed: 'subscribed',
+          all: 'all',
+        },
+        helpText: 'Default is "assigned"',
+      },
+      {
+        key: 'state',
+        required: false,
+        label: 'State',
+        choices: { open: 'open', closed: 'closed', all: 'all' },
+        helpText: 'Default is "open"',
+      },
     ],
     perform: triggerIssue,
 
-    sample: sample
-  }
+    sample: sample,
+  },
 };

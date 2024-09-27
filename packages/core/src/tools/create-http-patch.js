@@ -2,13 +2,13 @@ const zlib = require('zlib');
 const _ = require('lodash');
 const constants = require('../constants');
 
-const createHttpPatch = event => {
-  const createLogger = require('./create-logger');
-  const logBuffer = [];
-  const logger = createLogger(event, { logBuffer });
-
-  const httpPatch = object => {
+const createHttpPatch = (event) => {
+  const httpPatch = (object, logger) => {
     const originalRequest = object.request;
+
+    // Important not to reuse logger between calls, because we always destroy
+    // the logger at the end of a Lambda call.
+    object.zapierLogger = logger;
 
     // Avoids multiple patching and memory leaks (mostly when running tests locally)
     if (object.patchedByZapier) {
@@ -21,13 +21,15 @@ const createHttpPatch = event => {
     object.request = (options, callback) => {
       // `options` can be an object or a string. If options is a string, it is
       // automatically parsed with url.parse().
-      // See https://nodejs.org/docs/latest-v6.x/api/http.html#http_http_request_options_callback
+      // See https://nodejs.org/docs/latest-v14.x/api/http.html#http_http_request_options_callback
       let requestUrl;
       if (typeof options === 'string') {
         requestUrl = options;
       } else if (typeof options.url === 'string') {
-        // XXX: Somehow options.url is available for some requests although http.request doesn't really accept it.
-        // Without this else-if, many HTTP requests don't work. Should take a deeper look at this weirdness.
+        // XXX: Somehow options.url is available for some requests although
+        // http.request doesn't really accept it. Without this else-if, many
+        // HTTP requests don't work. Should take a deeper look at this
+        // weirdness.
         requestUrl = options.url;
       } else {
         requestUrl =
@@ -35,11 +37,11 @@ const createHttpPatch = event => {
           `${options.protocol || 'https:'}//${options.host}${options.path}`;
       }
 
-      const logger_url =
+      const loggerUrl =
         process.env.LOGGING_ENDPOINT || constants.DEFAULT_LOGGING_HTTP_ENDPOINT;
 
       // Ignore logger requests
-      if (requestUrl.indexOf(logger_url) !== -1) {
+      if (requestUrl.indexOf(loggerUrl) !== -1) {
         return originalRequest(options, callback);
       }
 
@@ -49,10 +51,10 @@ const createHttpPatch = event => {
       }
 
       // Proxy the callback to get the response
-      const newCallback = function(response) {
+      const newCallback = function (response) {
         const chunks = [];
 
-        const sendToLogger = responseBody => {
+        const sendToLogger = (responseBody) => {
           // Prepare data for GL
           const logData = {
             log_type: 'http',
@@ -64,13 +66,11 @@ const createHttpPatch = event => {
             request_via_client: false,
             response_status_code: response.statusCode,
             response_headers: response.headers,
-            response_content: responseBody
+            response_content: responseBody,
           };
 
-          logger(
-            `${logData.response_status_code} ${logData.request_method} ${
-              logData.request_url
-            }`,
+          object.zapierLogger(
+            `${logData.response_status_code} ${logData.request_method} ${logData.request_url}`,
             logData
           );
         };
@@ -87,14 +87,14 @@ const createHttpPatch = event => {
               sendToLogger(responseBody);
             });
           } else {
-            const responseBody = _.map(chunks, chunk => chunk.toString()).join(
-              '\n'
-            );
+            const responseBody = _.map(chunks, (chunk) =>
+              chunk.toString()
+            ).join('\n');
             sendToLogger(responseBody);
           }
         };
 
-        response.on('data', chunk => chunks.push(chunk));
+        response.on('data', (chunk) => chunks.push(chunk));
         response.on('end', logResponse);
         response.on('error', logResponse);
 

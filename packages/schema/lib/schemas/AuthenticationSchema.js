@@ -16,45 +16,23 @@ module.exports = makeSchema(
   {
     id: '/AuthenticationSchema',
     description: 'Represents authentication schemes.',
-    examples: [
-      { type: 'basic', test: '$func$2$f$' },
-      { type: 'custom', test: '$func$2$f$', fields: [{ key: 'abc' }] },
-      {
-        type: 'custom',
-        test: '$func$2$f$',
-        connectionLabel: '{{bundle.inputData.abc}}'
-      },
-      { type: 'custom', test: '$func$2$f$', connectionLabel: '$func$2$f$' },
-      { type: 'custom', test: '$func$2$f$', connectionLabel: { url: 'abc' } }
-    ],
-    antiExamples: [
-      {},
-      '$func$2$f$',
-      { type: 'unknown', test: '$func$2$f$' },
-      { type: 'custom', test: '$func$2$f$', fields: '$func$2$f$' },
-      {
-        type: 'custom',
-        test: '$func$2$f$',
-        fields: [{ key: 'abc' }, '$func$2$f$']
-      }
-    ],
     type: 'object',
     required: ['type', 'test'],
     properties: {
       type: {
         description: 'Choose which scheme you want to use.',
         type: 'string',
-        enum: ['basic', 'custom', 'digest', 'oauth1', 'oauth2', 'session']
+        enum: ['basic', 'custom', 'digest', 'oauth1', 'oauth2', 'session'],
       },
       test: {
         description:
           'A function or request that confirms the authentication is working.',
-        oneOf: [{ $ref: RequestSchema.id }, { $ref: FunctionSchema.id }]
+        oneOf: [{ $ref: RequestSchema.id }, { $ref: FunctionSchema.id }],
       },
       fields: {
         description:
           'Fields you can request from the user before they connect your app to Zapier.',
-        $ref: FieldsSchema.id
+        $ref: FieldsSchema.id,
       },
       connectionLabel: {
         description:
@@ -62,8 +40,8 @@ module.exports = makeSchema(
         anyOf: [
           { $ref: RequestSchema.id },
           { $ref: FunctionSchema.id },
-          { type: 'string' }
-        ]
+          { type: 'string' },
+        ],
       },
       // this is preferred to laying out config: anyOf: [...]
       basicConfig: { $ref: AuthenticationBasicConfigSchema.id },
@@ -71,9 +49,60 @@ module.exports = makeSchema(
       digestConfig: { $ref: AuthenticationDigestConfigSchema.id },
       oauth1Config: { $ref: AuthenticationOAuth1ConfigSchema.id },
       oauth2Config: { $ref: AuthenticationOAuth2ConfigSchema.id },
-      sessionConfig: { $ref: AuthenticationSessionConfigSchema.id }
+      sessionConfig: { $ref: AuthenticationSessionConfigSchema.id },
     },
-    additionalProperties: false
+    additionalProperties: false,
+    examples: [
+      {
+        type: 'basic',
+        test: '$func$2$f$',
+      },
+      {
+        type: 'custom',
+        test: '$func$2$f$',
+        fields: [{ key: 'abc' }],
+      },
+      {
+        type: 'custom',
+        test: '$func$2$f$',
+        connectionLabel: '{{bundle.inputData.abc}}',
+      },
+      {
+        type: 'custom',
+        test: '$func$2$f$',
+        connectionLabel: '$func$2$f$',
+      },
+      {
+        type: 'custom',
+        test: '$func$2$f$',
+        connectionLabel: { url: 'abc' },
+      },
+    ],
+    antiExamples: [
+      {
+        example: {},
+        reason: 'Missing required keys: type and test',
+      },
+      {
+        example: '$func$2$f$',
+        reason: 'Must be object',
+      },
+      {
+        example: {
+          type: 'unknown',
+          test: '$func$2$f$',
+        },
+        reason: 'Invalid value for key: type',
+      },
+      {
+        example: {
+          type: 'custom',
+          test: '$func$2$f$',
+          fields: '$func$2$f$',
+        },
+        reason: 'Invalid value for key: fields',
+      },
+    ],
   },
   [
     FieldsSchema,
@@ -84,6 +113,6 @@ module.exports = makeSchema(
     AuthenticationDigestConfigSchema,
     AuthenticationOAuth1ConfigSchema,
     AuthenticationOAuth2ConfigSchema,
-    AuthenticationSessionConfigSchema
+    AuthenticationSessionConfigSchema,
   ]
 );

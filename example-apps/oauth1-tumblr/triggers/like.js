@@ -1,7 +1,7 @@
 const perform = async (z, bundle) => {
   const url = 'https://api.tumblr.com/v2/user/likes';
   const response = await z.request(url);
-  const result = z.JSON.parse(response.content);
+  const result = response.data;
   return result.response.liked_posts || [];
 };
 
@@ -11,7 +11,7 @@ module.exports = {
 
   display: {
     label: 'New Like',
-    description: 'Triggers when you like a post.'
+    description: 'Triggers when you like a post.',
   },
 
   operation: {
@@ -19,7 +19,7 @@ module.exports = {
     sample: {
       blog_name: 'citriccomics',
       id: 3507845453,
-      post_url: 'http://citriccomics.tumblr.com/post/3507845453',
+      post_url: 'https://citriccomics.tumblr.com/post/3507845453',
       type: 'text',
       date: '2011-02-25 20:27:00 GMT',
       timestamp: 1298665620,
@@ -29,7 +29,7 @@ module.exports = {
       tags: ['tumblrize', 'milky dog', 'mini comic'],
       note_count: 14,
       title: 'Milky Dog',
-      body: '<p>Example body.</p>'
-    }
-  }
+      body: '<p>Example body.</p>',
+    },
+  },
 };

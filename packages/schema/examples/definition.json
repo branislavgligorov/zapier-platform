@@ -11,7 +11,7 @@
   "authentication": {
     "type": "oauth2",
     "test": {
-      "url": "http://fake-crm.getsandbox.com/ping",
+      "url": "https://fake-crm.getsandbox.com/ping",
       "method": "GET"
     },
     "fields": [
@@ -27,7 +27,7 @@
     "oauth2Config": {
       "authorizeUrl": "$func$2$f$",
       "getAccessToken": {
-        "url": "http://fake-crm.getsandbox.com/oauth/access_token",
+        "url": "https://fake-crm.getsandbox.com/oauth/access_token",
         "method": "POST"
       },
       "scope": "tags,users,contacts",
@@ -50,7 +50,7 @@
         },
         "operation": {
           "perform": {
-            "url": "http://fake-crm.getsandbox.com/tags/{{inputData.id}}"
+            "url": "https://fake-crm.getsandbox.com/tags/{{inputData.id}}"
           },
           "sample": {
             "id": 385,
@@ -71,7 +71,7 @@
         },
         "operation": {
           "perform": {
-            "url": "http://fake-crm.getsandbox.com/tags"
+            "url": "https://fake-crm.getsandbox.com/tags"
           },
           "sample": {
             "id": 385,
@@ -108,7 +108,7 @@
         },
         "operation": {
           "perform": {
-            "url": "http://fake-crm.getsandbox.com/users/{{inputData.id}}"
+            "url": "https://fake-crm.getsandbox.com/users/{{inputData.id}}"
           },
           "sample": {
             "id": 1,
@@ -130,7 +130,7 @@
         },
         "operation": {
           "perform": {
-            "url": "http://fake-crm.getsandbox.com/users"
+            "url": "https://fake-crm.getsandbox.com/users"
           },
           "sample": {
             "id": 49,
@@ -160,7 +160,7 @@
         },
         "operation": {
           "perform": {
-            "url": "http://fake-crm.getsandbox.com/contacts/{{inputData.id}}"
+            "url": "https://fake-crm.getsandbox.com/contacts/{{inputData.id}}"
           },
           "sample": {
             "id": 1,
@@ -183,12 +183,11 @@
       "list": {
         "display": {
           "label": "New Contact",
-          "description":
-            "Trigger when a new Contact is created in your account."
+          "description": "Trigger when a new Contact is created in your account."
         },
         "operation": {
           "perform": {
-            "url": "http://fake-crm.getsandbox.com/contacts"
+            "url": "https://fake-crm.getsandbox.com/contacts"
           },
           "sample": {
             "id": 1,
@@ -250,7 +249,7 @@
               "key": "owner_id",
               "label": "Owner",
               "type": "integer",
-              "dynamic": "user"
+              "dynamic": "user.id"
             },
             {
               "key": "tag_id",
@@ -275,15 +274,14 @@
       "operation": {
         "resource": "contact",
         "perform": {
-          "url":
-            "http://fake-crm.getsandbox.com/contacts?tag_id={{inputData.tagId}}"
+          "url": "https://fake-crm.getsandbox.com/contacts?tag_id={{inputData.tagId}}"
         },
         "inputFields": [
           {
             "key": "tagId",
             "label": "Tag",
             "type": "integer",
-            "dynamic": "tag"
+            "dynamic": "tag.id"
           }
         ],
         "sample": {
@@ -305,7 +303,7 @@
       },
       "operation": {
         "perform": {
-          "url": "http://fake-crm.getsandbox.com/tags"
+          "url": "https://fake-crm.getsandbox.com/tags"
         },
         "sample": {
           "id": 385,
@@ -324,7 +322,7 @@
       },
       "operation": {
         "perform": {
-          "url": "http://fake-crm.getsandbox.com/users"
+          "url": "https://fake-crm.getsandbox.com/users"
         },
         "sample": {
           "id": 49,
@@ -344,7 +342,7 @@
       },
       "operation": {
         "perform": {
-          "url": "http://fake-crm.getsandbox.com/contacts"
+          "url": "https://fake-crm.getsandbox.com/contacts"
         },
         "resource": "contact",
         "type": "polling",
@@ -371,11 +369,7 @@
       },
       "operation": {
         "perform": {
-          "url": "http://fake-crm.getsandbox.com/tags?name={{inputData.name}}"
-        },
-        "sample": {
-          "id": 385,
-          "name": "proactive enable ROI"
+          "url": "https://fake-crm.getsandbox.com/tags?name={{inputData.name}}"
         },
         "resource": "tag",
         "inputFields": [
@@ -449,13 +443,13 @@
             "key": "owner_id",
             "label": "Owner",
             "type": "integer",
-            "dynamic": "user"
+            "dynamic": "user.id"
           },
           {
             "key": "tag_id",
             "label": "Tag",
             "type": "integer",
-            "dynamic": "tag"
+            "dynamic": "tag.id"
           }
         ],
         "resource": "contact",

@@ -15,20 +15,27 @@ module.exports = makeSchema(
         description: 'The HTTP method for the request.',
         type: 'string',
         default: 'GET',
-        enum: ['GET']
+        enum: ['GET'],
       },
       url: {
         description:
           'A URL for the request (we will parse the querystring and merge with params). Keys and values will not be re-encoded.',
-        type: 'string'
+        type: 'string',
       },
       params: {
         description:
           'A mapping of the querystring - will get merged with any query params in the URL. Keys and values will be encoded.',
-        $ref: FlatObjectSchema.id
-      }
+        $ref: FlatObjectSchema.id,
+      },
     },
-    additionalProperties: false
+    additionalProperties: false,
+    examples: [{ method: 'GET', url: 'https://google.com' }],
+    antiExamples: [
+      {
+        example: { method: 'POST', url: 'https://google.com' },
+        reason: 'Invalid value for key: method',
+      },
+    ],
   },
   [FlatObjectSchema]
 );

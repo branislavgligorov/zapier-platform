@@ -1,46 +1,46 @@
-const _sharedBaseUrl = 'https://auth-json-server.zapier.ninja';
+const _sharedBaseUrl = 'https://auth-json-server.zapier-staging.com';
 
 const getRecipe = async (z, bundle) => {
   const response = await z.request({
     url: `${_sharedBaseUrl}/recipes/${bundle.inputData.id}`,
   });
-  return z.JSON.parse(response.content);
+  return response.data;
 };
 
 const listRecipes = async (z, bundle) => {
   const response = await z.request({
     url: _sharedBaseUrl + '/recipes',
     params: {
-      style: bundle.inputData.style
-    }
+      style: bundle.inputData.style,
+    },
   });
-  return z.JSON.parse(response.content);
+  return response.data;
 };
 
 const createRecipe = async (z, bundle) => {
   const response = await z.request({
     url: _sharedBaseUrl + '/recipes',
     method: 'POST',
-    body: JSON.stringify({
+    body: {
       name: bundle.inputData.name,
       directions: bundle.inputData.directions,
       authorId: bundle.inputData.authorId,
-    }),
+    },
     headers: {
-      'content-type': 'application/json'
-    }
+      'content-type': 'application/json',
+    },
   });
-  return z.JSON.parse(response.content);
+  return response.data;
 };
 
 const searchRecipe = async (z, bundle) => {
   const response = await z.request({
     url: _sharedBaseUrl + '/recipes',
     params: {
-      nameSearch: bundle.inputData.name
-    }
+      nameSearch: bundle.inputData.name,
+    },
   });
-  const matchingRecipes = z.JSON.parse(response.content);
+  const matchingRecipes = response.data;
 
   // Only return the first matching recipe
   if (matchingRecipes && matchingRecipes.length) {
@@ -73,11 +73,9 @@ const Recipe = {
       description: 'Gets a recipe.',
     },
     operation: {
-      inputFields: [
-        {key: 'id', required: true},
-      ],
+      inputFields: [{ key: 'id', required: true }],
       perform: getRecipe,
-      sample
+      sample,
     },
   },
   // The list method on this resource becomes a Trigger on the app. Zapier will use polling to watch for new records
@@ -88,10 +86,14 @@ const Recipe = {
     },
     operation: {
       inputFields: [
-        {key: 'style', type: 'string', helpText: 'Explain what style of cuisine this is.'},
+        {
+          key: 'style',
+          type: 'string',
+          helpText: 'Explain what style of cuisine this is.',
+        },
       ],
       perform: listRecipes,
-      sample
+      sample,
     },
   },
   // If your app supports webhooks, you can define a hook method instead of a list method.
@@ -100,7 +102,6 @@ const Recipe = {
   //
   // },
 
-  // The create method on this resource becomes a Write on this app
   create: {
     display: {
       label: 'Create Recipe',
@@ -108,27 +109,40 @@ const Recipe = {
     },
     operation: {
       inputFields: [
-        {key: 'name', required: true, type: 'string'},
-        {key: 'directions', required: true, type: 'text', helpText: 'Explain how should one make the recipe, step by step.'},
-        {key: 'authorId', required: true, type: 'integer', label: 'Author ID'},
-        {key: 'style', required: false, type: 'string', helpText: 'Explain what style of cuisine this is.'},
+        { key: 'name', required: true, type: 'string' },
+        {
+          key: 'directions',
+          required: true,
+          type: 'text',
+          helpText: 'Explain how should one make the recipe, step by step.',
+        },
+        {
+          key: 'authorId',
+          required: true,
+          type: 'integer',
+          label: 'Author ID',
+        },
+        {
+          key: 'style',
+          required: false,
+          type: 'string',
+          helpText: 'Explain what style of cuisine this is.',
+        },
       ],
       perform: createRecipe,
-      sample
+      sample,
     },
   },
-  // The search method on this resource becomes a Search on this app
+
   search: {
     display: {
       label: 'Find Recipe',
       description: 'Finds an existing recipe by name.',
     },
     operation: {
-      inputFields: [
-        {key: 'name', required: true, type: 'string'},
-      ],
+      inputFields: [{ key: 'name', required: true, type: 'string' }],
       perform: searchRecipe,
-      sample
+      sample,
     },
   },
 
@@ -142,13 +156,13 @@ const Recipe = {
   // outputFields: () => { return []; }
   // Alternatively, a static field definition should be provided, to specify labels for the fields
   outputFields: [
-    {key: 'id', label: 'ID'},
-    {key: 'createdAt', label: 'Created At'},
-    {key: 'name', label: 'Name'},
-    {key: 'directions', label: 'Directions'},
-    {key: 'authorId', label: 'Author ID'},
-    {key: 'style', label: 'Style'},
-  ]
+    { key: 'id', label: 'ID' },
+    { key: 'createdAt', label: 'Created At' },
+    { key: 'name', label: 'Name' },
+    { key: 'directions', label: 'Directions' },
+    { key: 'authorId', label: 'Author ID' },
+    { key: 'style', label: 'Style' },
+  ],
 };
 
 export default Recipe;

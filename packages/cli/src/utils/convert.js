@@ -4,7 +4,13 @@ const _ = require('lodash');
 const prettier = require('prettier');
 const semver = require('semver');
 
-const { PACKAGE_VERSION, PLATFORM_PACKAGE } = require('../constants');
+const {
+  PACKAGE_VERSION,
+  PLATFORM_PACKAGE,
+  LAMBDA_VERSION,
+  LEGACY_RUNNER_PACKAGE,
+  IS_TESTING,
+} = require('../constants');
 const { copyFile, ensureDir, readFile, writeFile } = require('./files');
 const { snakeCase } = require('./misc');
 const { getPackageLatestVersion } = require('./npm');
@@ -18,14 +24,14 @@ const TEMPLATE_DIR = path.join(__dirname, '../../scaffold/convert');
 const REPLACE_DIRECTIVE = '__REPLACE_ME@';
 
 // used to turn strings of code into real code
-const makePlaceholder = replacement => `${REPLACE_DIRECTIVE}${replacement}`;
+const makePlaceholder = (replacement) => `${REPLACE_DIRECTIVE}${replacement}`;
 
-const replacePlaceholders = str =>
+const replacePlaceholders = (str) =>
   str.replace(new RegExp(`"${REPLACE_DIRECTIVE}([^"]+)"`, 'g'), '$1');
 
-const quote = s => `'${s}'`;
+const quote = (s) => `'${s}'`;
 
-const escapeSpecialChars = s => s.replace(/\n/g, '\\n').replace(/'/g, "\\'");
+const escapeSpecialChars = (s) => s.replace(/\n/g, '\\n').replace(/'/g, "\\'");
 
 const createFile = async (content, filename, dir) => {
   const destFile = path.join(dir, filename);
@@ -35,8 +41,9 @@ const createFile = async (content, filename, dir) => {
   endSpinner();
 };
 
-const prettifyJs = code => prettier.format(code, { singleQuote: true });
-const prettifyJSON = origString => JSON.stringify(origString, null, 2);
+const prettifyJs = (code) =>
+  prettier.format(code, { singleQuote: true, parser: 'babel' });
+const prettifyJSON = (origString) => JSON.stringify(origString, null, 2);
 
 const renderTemplate = async (
   templateFile,
@@ -52,8 +59,8 @@ const renderTemplate = async (
   if (prettify) {
     const ext = path.extname(templateFile).toLowerCase();
     const prettifier = {
-      '.json': origString => prettifyJSON(JSON.parse(origString)),
-      '.js': prettifyJs
+      '.json': (origString) => prettifyJSON(JSON.parse(origString)),
+      '.js': prettifyJs,
     }[ext];
     if (prettifier) {
       content = prettifier(content);
@@ -63,9 +70,9 @@ const renderTemplate = async (
   return content;
 };
 
-const getAuthFieldKeys = appDefinition => {
+const getAuthFieldKeys = (appDefinition) => {
   const authFields = _.get(appDefinition, 'authentication.fields') || [];
-  const fieldKeys = authFields.map(f => f.key);
+  const fieldKeys = authFields.map((f) => f.key);
 
   const authType = _.get(appDefinition, 'authentication.type');
   switch (authType) {
@@ -91,67 +98,78 @@ const getAuthFieldKeys = appDefinition => {
   return fieldKeys;
 };
 
-const renderLegacyPackageJson = async (legacyApp, appDefinition) => {
+const renderPackageJson = async (appInfo, appDefinition) => {
+  const name = _.kebabCase(
+    appInfo.title || _.get(appInfo, ['general', 'title'])
+  );
+
   // Not using escapeSpecialChars because we don't want to escape single quotes (not
   // allowed in JSON)
-  const description = legacyApp.general.description
+  const description = (
+    appInfo.description ||
+    _.get(appInfo, ['general', 'description']) ||
+    ''
+  )
     .replace(/\n/g, '\\n')
     .replace(/"/g, '\\"');
 
-  const runnerVersion = await getPackageLatestVersion(
-    'zapier-platform-legacy-scripting-runner'
-  );
+  const version = appDefinition.version
+    ? semver.inc(appDefinition.version, 'patch')
+    : '1.0.0';
 
-  const templateContext = {
-    name: _.kebabCase(legacyApp.general.title),
-    description,
-    appId: legacyApp.general.app_id || 'null',
-    cliVersion: PACKAGE_VERSION,
-    coreVersion: appDefinition.platformVersion,
-    runnerVersion
+  const dependencies = {
+    [PLATFORM_PACKAGE]: appDefinition.platformVersion,
   };
+  if (appDefinition.legacy) {
+    const runnerVersion = await getPackageLatestVersion(LEGACY_RUNNER_PACKAGE);
+    dependencies[LEGACY_RUNNER_PACKAGE] = runnerVersion;
+  }
 
-  const templateFile = path.join(TEMPLATE_DIR, '/package.template.json');
-  return renderTemplate(templateFile, templateContext);
-};
+  const zapierMeta = {
+    convertedByCLIVersion: PACKAGE_VERSION,
+  };
+  const legacyAppId = _.get(appInfo, ['general', 'app_id']);
+  if (legacyAppId) {
+    zapierMeta.convertedFromAppID = legacyAppId;
+  }
 
-const renderVisualPackageJson = (appInfo, appDefinition) => {
   const pkg = {
-    name: _.kebabCase(appInfo.title),
-    version: semver.inc(appDefinition.version, 'patch'),
-    description: appInfo.description,
+    name,
+    version,
+    description,
     main: 'index.js',
     scripts: {
-      test: 'mocha --recursive -t 10000'
+      test: 'mocha --recursive -t 10000',
     },
     engines: {
-      node: '8.10.0',
-      npm: '>=5.6.0'
+      node: `>=${LAMBDA_VERSION}`,
+      npm: '>=5.6.0',
     },
-    dependencies: {
-      [PLATFORM_PACKAGE]: appDefinition.platformVersion
-    },
+    dependencies,
     devDependencies: {
       mocha: '^5.2.0',
-      should: '^13.2.0'
+      should: '^13.2.0',
     },
-    private: true
+    private: true,
+    zapier: zapierMeta,
   };
 
   return prettifyJSON(pkg);
 };
 
 const renderStep = (type, definition) => {
-  let exportBlock = _.cloneDeep(definition),
-    functionBlock = [];
+  let exportBlock = _.cloneDeep(definition);
+  let functionBlock = [];
 
   ['perform', 'performList', 'performSubscribe', 'performUnsubscribe'].forEach(
-    funcName => {
+    (funcName) => {
       const func = definition.operation[funcName];
       if (func && func.source) {
         const args = func.args || ['z', 'bundle'];
         functionBlock.push(
-          `const ${funcName} = (${args.join(', ')}) => {${func.source}};`
+          `const ${funcName} = async (${args.join(', ')}) => {\n${
+            func.source
+          }\n};`
         );
 
         exportBlock.operation[funcName] = makePlaceholder(funcName);
@@ -159,7 +177,7 @@ const renderStep = (type, definition) => {
     }
   );
 
-  ['inputFields', 'outputFields'].forEach(key => {
+  ['inputFields', 'outputFields'].forEach((key) => {
     const fields = definition.operation[key];
     if (Array.isArray(fields) && fields.length > 0) {
       // Godzilla currently doesn't allow mutliple dynamic fields (see PDE-948) but when it does, this will account for it
@@ -172,7 +190,9 @@ const renderStep = (type, definition) => {
             funcNum ? funcNum++ : ++funcNum && ''
           }`;
           functionBlock.push(
-            `const ${funcName} = (${args.join(', ')}) => {${maybeFunc.source}};`
+            `const ${funcName} = async (${args.join(', ')}) => {\n${
+              maybeFunc.source
+            }\n};`
           );
 
           exportBlock.operation[key][index] = makePlaceholder(funcName);
@@ -191,11 +211,11 @@ const renderStep = (type, definition) => {
 };
 
 // Render authData for test code
-const renderAuthData = appDefinition => {
+const renderAuthData = (appDefinition) => {
   const fieldKeys = getAuthFieldKeys(appDefinition);
-  const lines = _.map(fieldKeys, key => {
+  const lines = _.map(fieldKeys, (key) => {
     const upperKey = _.snakeCase(key).toUpperCase();
-    return `${key}: process.env.${upperKey}`;
+    return `"${key}": process.env.${upperKey}`;
   });
   if (_.isEmpty(lines)) {
     return `{
@@ -205,11 +225,11 @@ const renderAuthData = appDefinition => {
   return '{' + lines.join(',\n') + '}';
 };
 
-const renderDefaultInputData = definition => {
+const renderDefaultInputData = (definition) => {
   const lines = [];
 
   if (definition.inputFields) {
-    definition.inputFields.forEach(field => {
+    definition.inputFields.forEach((field) => {
       if (field.default || field.required) {
         const defaultValue = field.default
           ? quote(escapeSpecialChars(field.default))
@@ -232,34 +252,34 @@ const renderStepTest = async (stepType, definition, appDefinition) => {
   const templateName = {
     triggers: 'trigger-test.template.js',
     creates: 'create-test.template.js',
-    searches: 'search-test.template.js'
+    searches: 'search-test.template.js',
   }[stepType];
 
   const templateContext = {
     key: definition.key,
     authData: renderAuthData(appDefinition),
-    inputData: renderDefaultInputData(definition)
+    inputData: renderDefaultInputData(definition),
   };
 
   const templateFile = path.join(TEMPLATE_DIR, templateName);
   return renderTemplate(templateFile, templateContext);
 };
 
-const renderAuth = async appDefinition => {
-  let exportBlock = _.cloneDeep(appDefinition.authentication),
-    functionBlock = [];
+const renderAuth = async (appDefinition) => {
+  let exportBlock = _.cloneDeep(appDefinition.authentication);
+  let functionBlock = [];
 
   _.each(
     {
       connectionLabel: 'getConnectionLabel',
-      test: 'testAuth'
+      test: 'testAuth',
     },
     (funcName, key) => {
       const func = appDefinition.authentication[key];
       if (func && func.source) {
         const args = func.args || ['z', 'bundle'];
         functionBlock.push(
-          `const ${funcName} = (${args.join(', ')}) => {${func.source}};`
+          `const ${funcName} = async (${args.join(', ')}) => {${func.source}};`
         );
 
         exportBlock[key] = makePlaceholder(funcName);
@@ -276,15 +296,15 @@ const renderAuth = async appDefinition => {
   return prettifyJs(functionBlock + '\n\n' + exportBlock);
 };
 
-const renderHydrators = async appDefinition => {
-  let exportBlock = _.cloneDeep(appDefinition.hydrators),
-    functionBlock = [];
+const renderHydrators = async (appDefinition) => {
+  let exportBlock = _.cloneDeep(appDefinition.hydrators);
+  let functionBlock = [];
 
   _.each(appDefinition.hydrators, (func, funcName) => {
     if (func && func.source) {
       const args = func.args || ['z', 'bundle'];
       functionBlock.push(
-        `const ${funcName} = (${args.join(', ')}) => {${func.source}};`
+        `const ${funcName} = async (${args.join(', ')}) => {${func.source}};`
       );
       exportBlock[funcName] = makePlaceholder(funcName);
     }
@@ -299,10 +319,10 @@ const renderHydrators = async appDefinition => {
   return prettifyJs(functionBlock + '\n\n' + exportBlock);
 };
 
-const renderIndex = async appDefinition => {
-  let exportBlock = _.cloneDeep(appDefinition),
-    functionBlock = [],
-    importBlock = [];
+const renderIndex = async (appDefinition) => {
+  let exportBlock = _.cloneDeep(appDefinition);
+  let functionBlock = [];
+  let importBlock = [];
 
   // replace version and platformVersion with dynamic reference
   exportBlock.version = makePlaceholder("require('./package.json').version");
@@ -319,7 +339,7 @@ const renderIndex = async appDefinition => {
     {
       triggers: 'Trigger',
       creates: 'Create',
-      searches: 'Search'
+      searches: 'Search',
     },
     (importNameSuffix, stepType) => {
       _.each(appDefinition[stepType], (definition, key) => {
@@ -329,9 +349,8 @@ const renderIndex = async appDefinition => {
         importBlock.push(`const ${importName} = require('${filepath}');`);
 
         delete exportBlock[stepType][key];
-        exportBlock[stepType][
-          makePlaceholder(`[${importName}.key]`)
-        ] = makePlaceholder(importName);
+        exportBlock[stepType][makePlaceholder(`[${importName}.key]`)] =
+          makePlaceholder(importName);
       });
     }
   );
@@ -341,7 +360,7 @@ const renderIndex = async appDefinition => {
     exportBlock.hydrators = makePlaceholder('hydrators');
   }
 
-  ['beforeRequest', 'afterResponse'].forEach(middlewareType => {
+  ['beforeRequest', 'afterResponse'].forEach((middlewareType) => {
     const middlewares = appDefinition[middlewareType];
     if (middlewares && middlewares.length > 0) {
       // Backend converter always generates only one middleware
@@ -350,7 +369,7 @@ const renderIndex = async appDefinition => {
         const args = func.args || ['z', 'bundle'];
         const funcName = middlewareType;
         functionBlock.push(
-          `const ${funcName} = (${args.join(', ')}) => {${func.source}};`
+          `const ${funcName} = async (${args.join(', ')}) => {${func.source}};`
         );
 
         exportBlock[middlewareType][0] = makePlaceholder(funcName);
@@ -378,9 +397,9 @@ const renderIndex = async appDefinition => {
   );
 };
 
-const renderEnvironment = appDefinition => {
+const renderEnvironment = (appDefinition) => {
   const authFieldKeys = getAuthFieldKeys(appDefinition);
-  const lines = _.map(authFieldKeys, key => {
+  const lines = _.map(authFieldKeys, (key) => {
     const upperKey = _.snakeCase(key).toUpperCase();
     return `${upperKey}=YOUR_${upperKey}`;
   });
@@ -410,10 +429,8 @@ const writeAuth = async (appDefinition, newAppDir) => {
   await createFile(content, 'authentication.js', newAppDir);
 };
 
-const writePackageJson = async (appInfo, appDefinition, newAppDir, legacy) => {
-  const content = legacy
-    ? await renderLegacyPackageJson(appInfo, appDefinition)
-    : renderVisualPackageJson(appInfo, appDefinition);
+const writePackageJson = async (appInfo, appDefinition, newAppDir) => {
+  const content = await renderPackageJson(appInfo, appDefinition);
   await createFile(content, 'package.json', newAppDir);
 };
 
@@ -440,46 +457,35 @@ const writeEnvironment = async (appDefinition, newAppDir) => {
   await createFile(content, '.env', newAppDir);
 };
 
-const writeGitIgnore = async newAppDir => {
+const writeGitIgnore = async (newAppDir) => {
   const srcPath = path.join(TEMPLATE_DIR, '/gitignore');
   const destPath = path.join(newAppDir, '/.gitignore');
   await copyFile(srcPath, destPath);
-  startSpinner('Writing .gitignore');
-  endSpinner();
 };
 
-const writeLegacyZapierAppRc = async newAppDir => {
-  const content = prettifyJSON({
-    includeInBuild: ['scripting.js']
-  });
+const writeZapierAppRc = async (appInfo, appDefinition, newAppDir) => {
+  const json = {};
+  if (appInfo.id) {
+    json.id = appInfo.id;
+  }
+  if (appDefinition.legacy) {
+    json.includeInBuild = ['scripting.js'];
+  }
+  const content = prettifyJSON(json);
   await createFile(content, '.zapierapprc', newAppDir);
-  startSpinner('Writing .zapierapprc');
-  endSpinner();
 };
 
-const writeVisualZapierAppRc = async (newAppDir, id) => {
-  const content = prettifyJSON({
-    id
-  });
-  await createFile(content, '.zapierapprc', newAppDir);
-  startSpinner('Writing .zapierapprc');
-  endSpinner();
-};
-
-const convertApp = async (appInfo, appDefinition, newAppDir, opts = {}) => {
-  const defaultOpts = { legacy: true };
-  const { legacy } = { ...defaultOpts, ...opts };
-
-  if (process.env.NODE_ENV === 'test') {
+const convertApp = async (appInfo, appDefinition, newAppDir) => {
+  if (IS_TESTING) {
     startSpinner = endSpinner = () => null;
   }
 
   const promises = [];
 
-  ['triggers', 'creates', 'searches'].forEach(stepType => {
+  ['triggers', 'creates', 'searches'].forEach((stepType) => {
     _.each(appDefinition[stepType], (definition, key) => {
-      promises.push(writeStep(stepType, definition, key, newAppDir));
       promises.push(
+        writeStep(stepType, definition, key, newAppDir),
         writeStepTest(stepType, definition, key, appDefinition, newAppDir)
       );
     });
@@ -495,24 +501,18 @@ const convertApp = async (appInfo, appDefinition, newAppDir, opts = {}) => {
     promises.push(writeScripting(appDefinition, newAppDir));
   }
 
-  promises.push(writePackageJson(appInfo, appDefinition, newAppDir, legacy));
-  promises.push(writeIndex(appDefinition, newAppDir));
-  promises.push(writeEnvironment(appDefinition, newAppDir));
-  promises.push(writeGitIgnore(newAppDir));
   promises.push(
-    legacy
-      ? writeLegacyZapierAppRc(newAppDir)
-      : writeVisualZapierAppRc(newAppDir, appInfo.id)
+    writePackageJson(appInfo, appDefinition, newAppDir),
+    writeIndex(appDefinition, newAppDir),
+    writeEnvironment(appDefinition, newAppDir),
+    writeGitIgnore(newAppDir),
+    writeZapierAppRc(appInfo, appDefinition, newAppDir)
   );
 
-  return await Promise.all(promises);
+  return Promise.all(promises);
 };
-
-const convertVisualApp = _.partialRight(convertApp, { legacy: false });
-const convertLegacyApp = _.partialRight(convertApp, { legacy: true });
 
 module.exports = {
   renderTemplate,
-  convertLegacyApp,
-  convertVisualApp
+  convertApp,
 };

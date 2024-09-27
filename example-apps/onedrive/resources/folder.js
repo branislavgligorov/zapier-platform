@@ -1,57 +1,56 @@
-'use strict';
+'use strict'
 
-const _ = require('lodash');
+const _ = require('lodash')
 
-const utils = require('../utils');
-const parseResponse = utils.parseResponse;
-const handleError = utils.handleError;
-const cleanupPaths = utils.cleanupPaths;
-const extractParentsFromPath = utils.extractParentsFromPath;
-const {BASE_ITEM_URL} = require('../constants');
-const baseItem = require('./base-item');
+const utils = require('../utils')
+const parseResponse = utils.parseResponse
+const handleError = utils.handleError
+const cleanupPaths = utils.cleanupPaths
+const extractParentsFromPath = utils.extractParentsFromPath
+const { BASE_ITEM_URL } = require('../constants')
+const baseItem = require('./base-item')
 
-const getFolder = _.partial(baseItem.getItem, 'folder');
+const getFolder = _.partial(baseItem.getItem, 'folder')
 
 const listFolders = (z, bundle) => {
-  return baseItem.listItems('folder', z, bundle)
-    .then((results) => {
-      // Add parents when being called in the context of populating a dynamic dropdown (prefill).
-      // This allows users to "navigate back" to previous dirs in the Zap Editor
-      if (bundle.meta.prefill && bundle.inputData.folder) {
-        const parents = extractParentsFromPath(bundle.inputData.folder);
-        parents.forEach((result) => results.unshift(result));
-      }
+  return baseItem.listItems('folder', z, bundle).then((results) => {
+    // Add parents when being called in the context of populating a dynamic dropdown (prefill).
+    // This allows users to "navigate back" to previous dirs in the Zap Editor
+    if (bundle.meta.prefill && bundle.inputData.folder) {
+      const parents = extractParentsFromPath(bundle.inputData.folder)
+      parents.forEach((result) => results.unshift(result))
+    }
 
-      return results;
-    });
-};
+    return results
+  })
+}
 
 const createFolder = (z, bundle) => {
-  let folder = bundle.inputData.folder || '';
+  let folder = bundle.inputData.folder || ''
 
   if (folder) {
-    folder = `:${encodeURIComponent(folder)}:`; // OneDrive URI format
+    folder = `:${encodeURIComponent(folder)}:` // OneDrive URI format
   }
 
-  return z.request(
-    {
+  return z
+    .request({
       url: `${BASE_ITEM_URL}/me/drive/root${folder}/children`,
       method: 'POST',
-      body: JSON.stringify({
+      body: {
         name: bundle.inputData.name,
         folder: {}, // This tells OneDrive it's a folder (https://dev.onedrive.com/items/create.htm#example)
         '@microsoft.graph.conflictBehavior': 'rename',
-      }),
+      },
       headers: {
         'content-type': 'application/json',
       },
     })
-    .then(_.partial(parseResponse, 'folder'))
+    .then(_.partial(parseResponse, z, 'folder'))
     .then(cleanupPaths)
-    .catch(handleError);
-};
+    .catch(handleError)
+}
 
-const searchFolder = _.partial(baseItem.searchItem, 'folder');
+const searchFolder = _.partial(baseItem.searchItem, 'folder')
 
 module.exports = {
   key: 'folder',
@@ -90,7 +89,8 @@ module.exports = {
           // As mentioned above, triggers genereated from resources follow a
           // format of `<resource.key>List`, so that is what we use in all the dynamic dropdowns
           dynamic: 'folderList._path.name',
-          helpText: 'Folder where to look for the folder. Keep clicking the dropdown to go inside folders. Defaults to the top-level folder if left blank.',
+          helpText:
+            'Folder where to look for the folder. Keep clicking the dropdown to go inside folders. Defaults to the top-level folder if left blank.',
         },
       ],
       perform: listFolders,
@@ -112,7 +112,8 @@ module.exports = {
           label: 'Folder',
           required: false,
           dynamic: 'folderList._path.name',
-          helpText: 'Folder where to create the folder. Keep clicking the dropdown to go inside folders. Defaults to the top-level folder if left blank.',
+          helpText:
+            'Folder where to create the folder. Keep clicking the dropdown to go inside folders. Defaults to the top-level folder if left blank.',
         },
         {
           key: 'name',
@@ -139,7 +140,8 @@ module.exports = {
           label: 'Folder',
           required: false,
           dynamic: 'folderList._path.name',
-          helpText: 'Folder where to look for the folder. Keep clicking the dropdown to go inside folders. Defaults to the top-level folder if left blank.',
+          helpText:
+            'Folder where to look for the folder. Keep clicking the dropdown to go inside folders. Defaults to the top-level folder if left blank.',
         },
         {
           key: 'name',
@@ -156,7 +158,7 @@ module.exports = {
     name: 'Example',
     _path: '/Something/Example',
     _parent: '/Something',
-    webUrl: 'http://example.com',
+    webUrl: 'https://example.com',
     createdDateTime: '2016-09-16T03:37:04.72Z',
     lastModifiedDateTime: '2016-09-16T03:37:04.72Z',
   },
@@ -168,4 +170,4 @@ module.exports = {
     { key: '_parent', label: 'Parent Folder' },
     { key: 'webUrl', label: 'URL' },
   ],
-};
+}

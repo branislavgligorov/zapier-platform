@@ -14,10 +14,10 @@ export const tools: { env: { inject: (filename?: string) => void } };
 export const createAppTester: (
   appRaw: object,
   options?: { customStoreKey?: string }
-) => <T extends any, B extends Bundle>(
-  func: (z: ZObject, bundle: B) => Promise<T>,
+) => <T, B extends Bundle>(
+  func: (z: ZObject, bundle: B) => T | Promise<T>,
   bundle?: Partial<B> // partial so we don't have to make a full bundle in tests
-) => T extends Promise<T> ? T : Promise<T>;
+) => Promise<T>; // appTester always returns a promise
 
 // internal only
 // export const integrationTestHandler: () => any;
@@ -37,6 +37,7 @@ export interface Bundle<InputData = { [x: string]: any }> {
   inputData: InputData;
   inputDataRaw: { [x: string]: string };
   meta: {
+    isBulkRead: boolean;
     isFillingDynamicDropdown: boolean;
     isLoadingSample: boolean;
     isPopulatingDedupe: boolean;
@@ -51,24 +52,33 @@ export interface Bundle<InputData = { [x: string]: any }> {
     headers: { [x: string]: string };
     content: string;
   }>;
-  cleanedRequest?: Partial<{
-    method: HttpMethod;
-    querystring: { [x: string]: string };
-    headers: { [x: string]: string };
-    content: { [x: string]: string };
-  }> | any;
+  cleanedRequest?:
+    | Partial<{
+        method: HttpMethod;
+        querystring: { [x: string]: string };
+        headers: { [x: string]: string };
+        content: { [x: string]: string };
+      }>
+    | any;
+  outputData?: object;
   subscribeData?: { id: string };
   targetUrl?: string;
 }
 
+declare class AppError extends Error {
+  constructor(message: string, code?: string, status?: number);
+}
 declare class HaltedError extends Error {}
 declare class ExpiredAuthError extends Error {}
 declare class RefreshAuthError extends Error {}
+declare class ThrottledError extends Error {
+  constructor(message: string, delay?: number);
+}
 
 // copied http stuff from external typings
 export interface HttpRequestOptions {
   agent?: Agent;
-  body?: string | Buffer | ReadableStream | object;
+  body?: string | Buffer | NodeJS.ReadableStream | object;
   compress?: boolean;
   follow?: number;
   form?: object;
@@ -85,6 +95,7 @@ export interface HttpRequestOptions {
   size?: number;
   timeout?: number;
   url?: string;
+  skipThrowForStatus?: boolean;
 }
 
 interface BaseHttpResponse {
@@ -92,29 +103,37 @@ interface BaseHttpResponse {
   headers: { [key: string]: string };
   getHeader(key: string): string | undefined;
   throwForStatus(): void;
+  skipThrowForStatus: boolean;
   request: HttpRequestOptions;
 }
 
 export interface HttpResponse extends BaseHttpResponse {
   content: string;
-  json?: object;
+  data?: any;
+  json?: any;
 }
 
 export interface RawHttpResponse extends BaseHttpResponse {
   content: Buffer;
   json: Promise<object | undefined>;
-  body: ReadableStream;
+  body: NodeJS.ReadableStream;
 }
+
+type DehydrateFunc = <T>(
+  func: (z: ZObject, bundle: Bundle<T>) => any,
+  inputData: T
+) => string;
 
 export interface ZObject {
   request: {
     // most specific overloads go first
-    (url: string, options: HttpRequestOptions & { raw: true }): Promise<
-      RawHttpResponse
-    >;
-    (options: HttpRequestOptions & { raw: true; url: string }): Promise<
-      RawHttpResponse
-    >;
+    (
+      url: string,
+      options: HttpRequestOptions & { raw: true }
+    ): Promise<RawHttpResponse>;
+    (
+      options: HttpRequestOptions & { raw: true; url: string }
+    ): Promise<RawHttpResponse>;
 
     (url: string, options?: HttpRequestOptions): Promise<HttpResponse>;
     (options: HttpRequestOptions & { url: string }): Promise<HttpResponse>;
@@ -122,10 +141,8 @@ export interface ZObject {
 
   console: Console;
 
-  dehydrate: <T>(
-    func: (z: this, bundle: Bundle<T>) => any,
-    inputData: object
-  ) => string;
+  dehydrate: DehydrateFunc;
+  dehydrateFile: DehydrateFunc;
 
   cursor: {
     get: () => Promise<string>;
@@ -138,11 +155,12 @@ export interface ZObject {
    */
   stashFile: {
     (
-      input: string | Buffer | ReadableStream,
+      input: string | Buffer | NodeJS.ReadableStream,
       knownLength?: number,
       filename?: string,
       contentType?: string
     ): string;
+    (input: Promise<RawHttpResponse>): string;
     (input: Promise<string>): string;
   };
 
@@ -169,8 +187,10 @@ export interface ZObject {
   ) => string;
 
   errors: {
+    Error: typeof AppError;
     HaltedError: typeof HaltedError;
     ExpiredAuthError: typeof ExpiredAuthError;
     RefreshAuthError: typeof RefreshAuthError;
+    ThrottledError: typeof ThrottledError;
   };
 }

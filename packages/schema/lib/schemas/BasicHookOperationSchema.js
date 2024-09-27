@@ -1,6 +1,7 @@
 'use strict';
 
 const makeSchema = require('../utils/makeSchema');
+const { SKIP_KEY } = require('../constants');
 
 const BasicOperationSchema = require('./BasicOperationSchema');
 const FunctionSchema = require('./FunctionSchema');
@@ -29,14 +30,14 @@ BasicHookOperationSchema.properties = {
     docAnnotation: {
       required: {
         type: 'replace',
-        value: '**yes** (with exceptions, see description)'
-      }
-    }
+        value: '**yes** (with exceptions, see description)',
+      },
+    },
   },
   resource: BasicHookOperationSchema.properties.resource,
   perform: {
     description: 'A function that processes the inbound webhook request.',
-    $ref: FunctionSchema.id
+    $ref: FunctionSchema.id,
   },
   performList: {
     description:
@@ -46,9 +47,14 @@ BasicHookOperationSchema.properties = {
     docAnnotation: {
       required: {
         type: 'replace',
-        value: '**yes** (with exceptions, see description)'
-      }
-    }
+        value: '**yes** (with exceptions, see description)',
+      },
+    },
+  },
+  canPaginate: {
+    description:
+      'Does this endpoint support pagination via temporary cursor storage?',
+    type: 'boolean',
   },
   performSubscribe: {
     description:
@@ -58,9 +64,9 @@ BasicHookOperationSchema.properties = {
     docAnnotation: {
       required: {
         type: 'replace',
-        value: '**yes** (with exceptions, see description)'
-      }
-    }
+        value: '**yes** (with exceptions, see description)',
+      },
+    },
   },
   performUnsubscribe: {
     description:
@@ -70,14 +76,40 @@ BasicHookOperationSchema.properties = {
     docAnnotation: {
       required: {
         type: 'replace',
-        value: '**yes** (with exceptions, see description)'
-      }
-    }
+        value: '**yes** (with exceptions, see description)',
+      },
+    },
   },
   inputFields: BasicHookOperationSchema.properties.inputFields,
   outputFields: BasicHookOperationSchema.properties.outputFields,
-  sample: BasicHookOperationSchema.properties.sample
+  sample: BasicHookOperationSchema.properties.sample,
 };
+
+BasicHookOperationSchema.examples = [
+  {
+    type: 'hook',
+    perform: { require: 'some/path/to/file.js' },
+    performList: { require: 'some/path/to/file2.js' },
+    performSubscribe: { require: 'some/path/to/file3.js' },
+    performUnsubscribe: { require: 'some/path/to/file4.js' },
+    sample: { id: 42, name: 'Hooli' },
+  },
+];
+
+BasicHookOperationSchema.antiExamples = [
+  {
+    [SKIP_KEY]: true, // Cannot validate that sample is only required if display isn't true / top-level resource doesn't have sample
+    example: {
+      type: 'hook',
+      perform: { require: 'some/path/to/file.js' },
+      performList: { require: 'some/path/to/file2.js' },
+      performSubscribe: { require: 'some/path/to/file3.js' },
+      performUnsubscribe: { require: 'some/path/to/file4.js' },
+    },
+    reason:
+      'Missing required key: sample. Note - This is only invalid if `display` is not explicitly set to true and if it does not belong to a resource that has a sample.',
+  },
+];
 
 module.exports = makeSchema(
   BasicHookOperationSchema,

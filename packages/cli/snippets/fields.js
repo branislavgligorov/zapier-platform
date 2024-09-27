@@ -1,8 +1,8 @@
 const App = {
-  //...
+  // ...
   creates: {
     create_recipe: {
-      //...
+      // ...
       operation: {
         // an array of objects is the simplest way
         inputFields: [
@@ -10,16 +10,16 @@ const App = {
             key: 'title',
             required: true,
             label: 'Title of Recipe',
-            helpText: 'Name your recipe!'
+            helpText: 'Name your recipe!',
           },
           {
             key: 'style',
             required: true,
-            choices: { mexican: 'Mexican', italian: 'Italian' }
-          }
+            choices: { mexican: 'Mexican', italian: 'Italian' },
+          },
         ],
-        perform: () => {}
-      }
-    }
-  }
+        perform: () => {},
+      },
+    },
+  },
 };

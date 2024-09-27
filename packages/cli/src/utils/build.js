@@ -15,7 +15,9 @@ const ignore = require('ignore');
 const gitIgnore = require('parse-gitignore');
 const semver = require('semver');
 
-const eslint = require('eslint');
+const {
+  constants: { Z_BEST_COMPRESSION },
+} = require('zlib');
 
 const constants = require('../constants');
 
@@ -24,19 +26,26 @@ const {
   readFile,
   copyDir,
   ensureDir,
-  removeDir
+  removeDir,
 } = require('./files');
 
-const { prettyJSONstringify, startSpinner, endSpinner } = require('./display');
+const {
+  prettyJSONstringify,
+  startSpinner,
+  endSpinner,
+  flattenCheckResult,
+} = require('./display');
 
 const {
   getLinkedAppConfig,
-  checkCredentials,
-  upload,
-  callAPI
+  getWritableApp,
+  upload: _uploadFunc,
+  validateApp,
 } = require('./api');
 
 const { runCommand, isWindows } = require('./misc');
+
+const debug = require('debug')('zapier:build');
 
 const stripPath = (cwd, filePath) => filePath.split(cwd).pop();
 
@@ -66,11 +75,11 @@ const requiredFiles = (cwd, entryPoints) => {
       process: undefined,
       global: undefined,
       'Buffer.isBuffer': undefined,
-      Buffer: undefined
+      Buffer: undefined,
     },
     ignoreMissing: true,
     debug: false,
-    standalone: undefined
+    standalone: undefined,
   };
   const b = browserify(argv);
 
@@ -94,9 +103,9 @@ const requiredFiles = (cwd, entryPoints) => {
   });
 };
 
-const listFiles = dir => {
-  const isBlacklisted = filePath => {
-    return constants.BLACKLISTED_PATHS.find(excluded => {
+const listFiles = (dir) => {
+  const isBlacklisted = (filePath) => {
+    return constants.BLACKLISTED_PATHS.find((excluded) => {
       return filePath.search(excluded) === 0;
     });
   };
@@ -104,8 +113,8 @@ const listFiles = dir => {
   return new Promise((resolve, reject) => {
     const paths = [];
     const cwd = dir + path.sep;
-    klaw(dir)
-      .on('data', item => {
+    klaw(dir, { preserveSymlinks: true })
+      .on('data', (item) => {
         const strippedPath = stripPath(cwd, item.path);
         if (!item.stats.isDirectory() && !isBlacklisted(strippedPath)) {
           paths.push(strippedPath);
@@ -123,55 +132,26 @@ const listFiles = dir => {
 const respectGitIgnore = (dir, paths) => {
   const gitIgnorePath = path.join(dir, '.gitignore');
   if (!fs.existsSync(gitIgnorePath)) {
-    if (process.env.NODE_ENV !== 'test') {
-      console.log(
-        '\n\n!!Warning!! There is no .gitignore, so we are including all files. This might make the source.zip file too large\n\n'
+    if (!constants.IS_TESTING) {
+      console.warn(
+        `\n\n\t${colors.yellow(
+          '!! Warning !!'
+        )}\n\nThere is no .gitignore, so we are including all files. This might make the source.zip file too large\n`
       );
     }
-  }
-  const gitIgnoredPaths = gitIgnore(gitIgnorePath);
-  const gitFilter = ignore().add(gitIgnoredPaths);
-
-  return gitFilter.filter(paths);
-};
-
-// returns paths as to be chainable
-const verifyNodeFeatures = paths => {
-  const opts = {
-    plugins: ['node'],
-    // set version as high as possible, let's parse it all
-    // see: https://eslint.org/docs/user-guide/configuring#specifying-parser-options
-    parserOptions: { ecmaVersion: 9 },
-    useEslintrc: false, // literally only check this rule
-    rules: {
-      'node/no-unsupported-features': [
-        'error',
-        { version: require('../constants').LAMBDA_VERSION }
-      ]
-    }
-  };
-
-  // only lint js files; node_modules ignored by default
-  const jsPaths = paths.filter(p => p.endsWith('.js'));
-  const cli = new eslint.CLIEngine(opts);
-  const errors = eslint.CLIEngine.getErrorResults(
-    cli.executeOnFiles(jsPaths).results
-  );
-
-  if (errors.length) {
-    if (process.env.NODE_ENV !== 'test') {
-      console.log('\n', cli.getFormatter()(errors));
-    }
-    throw new Error('Using unsupported features, see above');
-  } else {
     return paths;
   }
+  const gitIgnoredPaths = gitIgnore(gitIgnorePath);
+  const validGitIgnorePaths = gitIgnoredPaths.filter(ignore.isPathValid);
+  const gitFilter = ignore().add(validGitIgnorePaths);
+
+  return gitFilter.filter(paths);
 };
 
 const forceIncludeDumbPath = (appConfig, filePath) => {
   let matchesConfigInclude = false;
   const configIncludePaths = _.get(appConfig, 'includeInBuild', []);
-  _.each(configIncludePaths, includePath => {
+  _.each(configIncludePaths, (includePath) => {
     if (filePath.match(RegExp(includePath, 'i'))) {
       matchesConfigInclude = true;
       return false;
@@ -179,11 +159,15 @@ const forceIncludeDumbPath = (appConfig, filePath) => {
     return true; // Because of consistent-return
   });
 
-  const nodeMajorVersion = semver(constants.LAMBDA_VERSION).major;
+  const nodeMajorVersion = semver.coerce(constants.LAMBDA_VERSION).major;
 
   return (
     filePath.endsWith('package.json') ||
     filePath.endsWith('definition.json') ||
+    // include old async deasync versions so this runs seamlessly across node versions
+    filePath.endsWith(path.join('bin', 'linux-x64-node-10', 'deasync.node')) ||
+    filePath.endsWith(path.join('bin', 'linux-x64-node-12', 'deasync.node')) ||
+    filePath.endsWith(path.join('bin', 'linux-x64-node-14', 'deasync.node')) ||
     filePath.endsWith(
       // Special, for zapier-platform-legacy-scripting-runner
       path.join('bin', `linux-x64-node-${nodeMajorVersion}`, 'deasync.node')
@@ -191,7 +175,6 @@ const forceIncludeDumbPath = (appConfig, filePath) => {
     filePath.match(
       path.sep === '\\' ? /aws-sdk\\apis\\.*\.json/ : /aws-sdk\/apis\/.*\.json/
     ) ||
-    (global.argOpts['include-js-map'] && filePath.endsWith('.js.map')) ||
     matchesConfigInclude
   );
 };
@@ -200,27 +183,27 @@ const writeZipFromPaths = (dir, zipPath, paths) => {
   return new Promise((resolve, reject) => {
     const output = fs.createWriteStream(zipPath);
     const zip = archiver('zip', {
-      store: true // Sets the compression method to STORE.
+      zlib: { level: Z_BEST_COMPRESSION },
     });
 
     // listen for all archive data to be written
-    output.on('close', function() {
+    output.on('close', function () {
       resolve();
     });
 
-    zip.on('error', function(err) {
+    zip.on('error', function (err) {
       reject(err);
     });
 
     // pipe archive data to the file
     zip.pipe(output);
 
-    paths.forEach(function(filePath) {
-      var basePath = path.dirname(filePath);
+    paths.forEach(function (filePath) {
+      let basePath = path.dirname(filePath);
       if (basePath === '.') {
         basePath = undefined;
       }
-      var name = path.join(dir, filePath);
+      const name = path.join(dir, filePath);
       zip.file(name, { name: filePath, mode: 0o755 });
     });
 
@@ -228,10 +211,10 @@ const writeZipFromPaths = (dir, zipPath, paths) => {
   });
 };
 
-const makeZip = async (dir, zipPath) => {
+const makeZip = async (dir, zipPath, disableDependencyDetection) => {
   const entryPoints = [
     path.resolve(dir, 'zapierwrapper.js'),
-    path.resolve(dir, 'index.js')
+    path.resolve(dir, 'index.js'),
   ];
 
   let paths;
@@ -239,10 +222,10 @@ const makeZip = async (dir, zipPath) => {
   const [dumbPaths, smartPaths, appConfig] = await Promise.all([
     listFiles(dir),
     requiredFiles(dir, entryPoints),
-    getLinkedAppConfig(dir)
+    getLinkedAppConfig(dir).catch(() => ({})),
   ]);
 
-  if (global.argOpts['disable-dependency-detection']) {
+  if (disableDependencyDetection) {
     paths = dumbPaths;
   } else {
     let finalPaths = smartPaths.concat(
@@ -250,15 +233,11 @@ const makeZip = async (dir, zipPath) => {
     );
     finalPaths = _.uniq(finalPaths);
     finalPaths.sort();
-    if (global.argOpts.debug) {
-      console.log('\nZip files:');
-      finalPaths.forEach(filePath => console.log(`  ${filePath}`));
-      console.log('');
-    }
+    debug('\nZip files:');
+    finalPaths.forEach((filePath) => debug(`  ${filePath}`));
+    debug('');
     paths = finalPaths;
   }
-
-  verifyNodeFeatures(paths);
 
   await writeZipFromPaths(dir, zipPath, paths);
 };
@@ -267,12 +246,9 @@ const makeSourceZip = async (dir, zipPath) => {
   const paths = await listFiles(dir);
   const finalPaths = respectGitIgnore(dir, paths);
   finalPaths.sort();
-
-  if (global.argOpts.debug) {
-    console.log('\nSource Zip files:');
-    finalPaths.forEach(filePath => console.log(`  ${filePath}`));
-    console.log('');
-  }
+  debug('\nSource Zip files:');
+  finalPaths.forEach((filePath) => debug(`  ${filePath}`));
+  debug();
   await writeZipFromPaths(dir, zipPath, finalPaths);
 };
 
@@ -281,7 +257,7 @@ const makeSourceZip = async (dir, zipPath) => {
 const _appCommandZapierWrapper = (dir, event) => {
   const app = require(`${dir}/zapierwrapper.js`);
   event = Object.assign({}, event, {
-    calledFromCli: true
+    calledFromCli: true,
   });
   return new Promise((resolve, reject) => {
     app.handler(event, {}, (err, resp) => {
@@ -305,7 +281,7 @@ const maybeNotifyAboutOutdated = () => {
   if (requiredVersion) {
     const notifier = updateNotifier({
       pkg: { name: constants.PLATFORM_PACKAGE, version: requiredVersion },
-      updateCheckInterval: constants.UPDATE_NOTIFICATION_INTERVAL
+      updateCheckInterval: constants.UPDATE_NOTIFICATION_INTERVAL,
     });
 
     if (notifier.update && notifier.update.latest !== requiredVersion) {
@@ -316,16 +292,39 @@ const maybeNotifyAboutOutdated = () => {
           'package.json'
         )} (${colors.grey(notifier.update.current)} → ${colors.green(
           notifier.update.latest
-        )}) and then running ${colors.red('zapier test')}.`
+        )}) and then running ${colors.red('zapier test')}.`,
       });
     }
   }
 };
 
-const build = async (zipPath, sourceZipPath, wdir) => {
-  wdir = wdir || process.cwd();
-  zipPath = zipPath || constants.BUILD_PATH;
-  sourceZipPath = sourceZipPath || constants.SOURCE_PATH;
+const maybeRunBuildScript = async (options = {}) => {
+  const ZAPIER_BUILD_KEY = '_zapier-build';
+
+  // Make sure we don't accidentally call the Zapier build hook inside itself
+  if (process.env.npm_lifecycle_event !== ZAPIER_BUILD_KEY) {
+    const pJson = require(path.resolve(
+      options.cwd || process.cwd(),
+      'package.json'
+    ));
+
+    if (_.get(pJson, ['scripts', ZAPIER_BUILD_KEY])) {
+      startSpinner(`Running ${ZAPIER_BUILD_KEY} script`);
+      await runCommand('npm', ['run', ZAPIER_BUILD_KEY], options);
+      endSpinner();
+    }
+  }
+};
+
+const _buildFunc = async ({
+  skipNpmInstall = false,
+  disableDependencyDetection = false,
+  skipValidation = false,
+} = {}) => {
+  const zipPath = constants.BUILD_PATH;
+  const sourceZipPath = constants.SOURCE_PATH;
+  const wdir = process.cwd();
+
   const osTmpDir = await fse.realpath(os.tmpdir());
   const tmpDir = path.join(
     osTmpDir,
@@ -334,23 +333,23 @@ const build = async (zipPath, sourceZipPath, wdir) => {
 
   maybeNotifyAboutOutdated();
 
+  await maybeRunBuildScript();
+
   // make sure our directories are there
   await ensureDir(tmpDir);
   await ensureDir(constants.BUILD_DIR);
 
   startSpinner('Copying project to temp directory');
   await copyDir(wdir, tmpDir, {
-    filter: process.env.SKIP_NPM_INSTALL
-      ? dir => !dir.includes('.zip')
-      : undefined
+    filter: skipNpmInstall ? (dir) => !dir.includes('.zip') : undefined,
   });
 
   let output = {};
-  if (!process.env.SKIP_NPM_INSTALL) {
+  if (!skipNpmInstall) {
     endSpinner();
     startSpinner('Installing project dependencies');
     output = await runCommand('npm', ['install', '--production'], {
-      cwd: tmpDir
+      cwd: tmpDir,
     });
   }
 
@@ -378,74 +377,91 @@ const build = async (zipPath, sourceZipPath, wdir) => {
       'zapierwrapper.js'
     )
   );
-  await writeFile(`${tmpDir}/zapierwrapper.js`, zapierWrapperBuf.toString());
+  await writeFile(
+    path.join(tmpDir, 'zapierwrapper.js'),
+    zapierWrapperBuf.toString()
+  );
   endSpinner();
 
   startSpinner('Building app definition.json');
-  const rawDefinition = (await _appCommandZapierWrapper(tmpDir, {
-    command: 'definition'
-  })).results;
+  const rawDefinition = (
+    await _appCommandZapierWrapper(tmpDir, {
+      command: 'definition',
+    })
+  ).results;
 
   const fileWriteError = await writeFile(
-    `${tmpDir}/definition.json`,
+    path.join(tmpDir, 'definition.json'),
     prettyJSONstringify(rawDefinition)
   );
 
   if (fileWriteError) {
-    if (global.argOpts.debug) {
-      console.log('\nFile Write Error:');
-      console.log(fileWriteError);
-      console.log('');
-    }
+    debug('\nFile Write Error:\n', fileWriteError, '\n');
     throw new Error(
       `Unable to write ${tmpDir}/definition.json, please check file permissions!`
     );
   }
   endSpinner();
 
-  startSpinner('Validating project');
-  const validateResponse = await _appCommandZapierWrapper(tmpDir, {
-    command: 'validate'
-  });
+  if (!skipValidation) {
+    /**
+     * 'Validation' as performed here is twofold:
+     * (Locally - `validate`) A Schema Validation is performed locally against the versions schema
+     * (Remote - `validateApp`) Both the Schema, AppVersion, and Auths are validated
+     */
 
-  const validationErrors = validateResponse.results;
-  if (validationErrors.length) {
-    if (global.argOpts.debug) {
-      console.log('\nErrors:');
-      console.log(validationErrors);
-      console.log('');
+    startSpinner('Validating project schema');
+    const validateResponse = await _appCommandZapierWrapper(tmpDir, {
+      command: 'validate',
+    });
+
+    const validationErrors = validateResponse.results;
+    if (validationErrors.length) {
+      debug('\nErrors:\n', validationErrors, '\n');
+      throw new Error(
+        'We hit some validation errors, try running `zapier validate` to see them!'
+      );
     }
 
-    throw new Error(
-      'We hit some validation errors, try running `zapier validate` to see them!'
-    );
-  }
+    startSpinner('Validating project style');
 
-  // No need to mention specifically we're validating style checks as that's
-  //   implied from `zapier validate`, though it happens as a separate process
-  const styleChecksResponse = await callAPI('/style-check', {
-    skipDeployKey: true,
-    method: 'POST',
-    body: rawDefinition
-  });
+    // No need to mention specifically we're validating style checks as that's
+    //   implied from `zapier validate`, though it happens as a separate process
+    const styleChecksResponse = await validateApp(rawDefinition);
 
-  const styleErrors = styleChecksResponse.errors;
-  if (!_.isEmpty(styleErrors)) {
-    if (global.argOpts.debug) {
-      console.log('\nErrors:');
-      console.log(styleErrors);
-      console.log('');
+    if (_.get(styleChecksResponse, ['errors', 'total_failures'])) {
+      debug(
+        '\nErrors:\n',
+        prettyJSONstringify(styleChecksResponse.errors.results),
+        '\n'
+      );
+      throw new Error(
+        'We hit some style validation errors, try running `zapier validate` to see them!'
+      );
     }
+    endSpinner();
 
-    throw new Error(
-      'We hit some validation errors, try running `zapier validate` to see them!'
-    );
+    if (_.get(styleChecksResponse, ['warnings', 'total_failures'])) {
+      console.log(colors.yellow('WARNINGS:'));
+      const checkIssues = flattenCheckResult(styleChecksResponse);
+      for (const issue of checkIssues) {
+        if (issue.category !== 'Errors') {
+          console.log(colors.yellow(`- ${issue.description}`));
+        }
+      }
+      console.log(colors.yellow('Run `zapier validate` for more details.'));
+    }
+  } else {
+    debug('\nWarning: Skipping Validation');
   }
-  endSpinner();
 
   startSpinner('Zipping project and dependencies');
-  await makeZip(tmpDir, wdir + path.sep + zipPath);
-  await makeSourceZip(tmpDir, wdir + path.sep + sourceZipPath);
+  await makeZip(tmpDir, path.join(wdir, zipPath), disableDependencyDetection);
+  await makeSourceZip(
+    tmpDir,
+    path.join(wdir, sourceZipPath),
+    disableDependencyDetection
+  );
   endSpinner();
 
   startSpinner('Testing build');
@@ -470,21 +486,33 @@ const build = async (zipPath, sourceZipPath, wdir) => {
   return zipPath;
 };
 
-const buildAndUploadDir = async (zipPath, sourceZipPath, appDir) => {
-  zipPath = zipPath || constants.BUILD_PATH;
-  appDir = appDir || '.';
-  sourceZipPath = sourceZipPath || constants.SOURCE_PATH;
-  await checkCredentials();
-  await build(zipPath, sourceZipPath, appDir);
-  await upload(zipPath, sourceZipPath, appDir);
+const buildAndOrUpload = async (
+  { build = false, upload = false } = {},
+  buildOpts
+) => {
+  if (!(build || upload)) {
+    throw new Error('must either build or upload');
+  }
+
+  // we should able to build without any auth, but if we're uploading, we should fail early
+  let app;
+  if (upload) {
+    app = await getWritableApp();
+  }
+
+  if (build) {
+    await _buildFunc(buildOpts);
+  }
+  if (upload) {
+    await _uploadFunc(app, buildOpts);
+  }
 };
 
 module.exports = {
-  build,
-  buildAndUploadDir,
+  buildAndOrUpload,
   makeZip,
   makeSourceZip,
   listFiles,
   requiredFiles,
-  verifyNodeFeatures
+  maybeRunBuildScript,
 };

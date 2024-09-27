@@ -14,7 +14,7 @@ describe('mutuallyExclusiveFields', () => {
           noun: 'Foo',
           display: {
             label: 'Create Foo',
-            description: 'Creates a...'
+            description: 'Creates a...',
           },
           operation: {
             perform: '$func$2$f$',
@@ -26,14 +26,14 @@ describe('mutuallyExclusiveFields', () => {
                 children: [
                   {
                     key: 'product',
-                    type: 'string'
-                  }
-                ]
-              }
-            ]
-          }
-        }
-      }
+                    type: 'string',
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      },
     };
 
     const results = schema.validateAppDefinition(definition);
@@ -50,7 +50,7 @@ describe('mutuallyExclusiveFields', () => {
           noun: 'Foo',
           display: {
             label: 'Create Foo',
-            description: 'Creates a...'
+            description: 'Creates a...',
           },
           operation: {
             perform: '$func$2$f$',
@@ -61,15 +61,15 @@ describe('mutuallyExclusiveFields', () => {
                 key: 'line_items',
                 children: [
                   {
-                    key: 'product'
-                  }
+                    key: 'product',
+                  },
                 ],
-                list: true
-              }
-            ]
-          }
-        }
-      }
+                list: true,
+              },
+            ],
+          },
+        },
+      },
     };
 
     const results = schema.validateAppDefinition(definition);
@@ -77,6 +77,42 @@ describe('mutuallyExclusiveFields', () => {
     results.errors[0].stack.should.eql(
       "instance.creates.foo.inputFields[1] must not contain children and list, as they're mutually exclusive."
     );
+  });
+
+  it('should not error on fields that have children and list when list is false', () => {
+    const definition = {
+      version: '1.0.0',
+      platformVersion: '1.0.0',
+      creates: {
+        foo: {
+          key: 'foo',
+          noun: 'Foo',
+          display: {
+            label: 'Create Foo',
+            description: 'Creates a...',
+          },
+          operation: {
+            perform: '$func$2$f$',
+            sample: { id: 1 },
+            inputFields: [
+              { key: 'orderId', type: 'number' },
+              {
+                key: 'line_items',
+                children: [
+                  {
+                    key: 'product',
+                  },
+                ],
+                list: false,
+              },
+            ],
+          },
+        },
+      },
+    };
+
+    const results = schema.validateAppDefinition(definition);
+    results.errors.should.have.length(0);
   });
 
   it('should error on fields that have list and dict', () => {
@@ -89,7 +125,7 @@ describe('mutuallyExclusiveFields', () => {
           noun: 'Foo',
           display: {
             label: 'Create Foo',
-            description: 'Creates a...'
+            description: 'Creates a...',
           },
           operation: {
             perform: '$func$2$f$',
@@ -99,12 +135,12 @@ describe('mutuallyExclusiveFields', () => {
               {
                 key: 'line_items',
                 dict: true,
-                list: true
-              }
-            ]
-          }
-        }
-      }
+                list: true,
+              },
+            ],
+          },
+        },
+      },
     };
 
     const results = schema.validateAppDefinition(definition);
@@ -124,7 +160,7 @@ describe('mutuallyExclusiveFields', () => {
           noun: 'Foo',
           display: {
             label: 'Create Foo',
-            description: 'Creates a...'
+            description: 'Creates a...',
           },
           operation: {
             perform: '$func$2$f$',
@@ -134,16 +170,16 @@ describe('mutuallyExclusiveFields', () => {
                 key: 'orderId',
                 type: 'number',
                 dynamic: 'foo.id.number',
-                dict: true
+                dict: true,
               },
               {
                 key: 'line_items',
-                list: true
-              }
-            ]
-          }
-        }
-      }
+                list: true,
+              },
+            ],
+          },
+        },
+      },
     };
 
     const results = schema.validateAppDefinition(definition);
@@ -151,6 +187,42 @@ describe('mutuallyExclusiveFields', () => {
     results.errors[0].stack.should.eql(
       "instance.creates.foo.inputFields[0] must not contain dynamic and dict, as they're mutually exclusive."
     );
+  });
+
+  it('should not error on fields that have dynamic and dict when dict is false', () => {
+    const definition = {
+      version: '1.0.0',
+      platformVersion: '1.0.0',
+      creates: {
+        foo: {
+          key: 'foo',
+          noun: 'Foo',
+          display: {
+            label: 'Create Foo',
+            description: 'Creates a...',
+          },
+          operation: {
+            perform: '$func$2$f$',
+            sample: { id: 1 },
+            inputFields: [
+              {
+                key: 'orderId',
+                type: 'number',
+                dynamic: 'foo.id.number',
+                dict: false,
+              },
+              {
+                key: 'line_items',
+                list: true,
+              },
+            ],
+          },
+        },
+      },
+    };
+
+    const results = schema.validateAppDefinition(definition);
+    results.errors.should.have.length(0);
   });
 
   it('should error on fields that have dynamic and choices', () => {
@@ -163,7 +235,7 @@ describe('mutuallyExclusiveFields', () => {
           noun: 'Foo',
           display: {
             label: 'Create Foo',
-            description: 'Creates a...'
+            description: 'Creates a...',
           },
           operation: {
             perform: '$func$2$f$',
@@ -175,17 +247,17 @@ describe('mutuallyExclusiveFields', () => {
                 dynamic: 'foo.id.number',
                 choices: {
                   uno: 1,
-                  dos: 2
-                }
+                  dos: 2,
+                },
               },
               {
                 key: 'line_items',
-                list: true
-              }
-            ]
-          }
-        }
-      }
+                list: true,
+              },
+            ],
+          },
+        },
+      },
     };
 
     const results = schema.validateAppDefinition(definition);

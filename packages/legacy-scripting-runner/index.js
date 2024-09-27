@@ -1,26 +1,53 @@
 const querystring = require('querystring');
+const { promisify } = require('util');
+const { URL } = require('url');
 
 const _ = require('lodash');
-const FormData = require('form-data');
-const cleaner = require('zapier-platform-core/src/tools/cleaner');
 const flatten = require('flat');
+const FormData = require('form-data');
 
-const createInternalRequestClient = input => {
+const {
+  recurseReplaceBank,
+} = require('zapier-platform-core/src/tools/cleaner');
+
+const { flattenPaths } = require('zapier-platform-core/src/tools/data');
+
+const {
+  ErrorException,
+  HaltedException,
+  StopRequestException,
+  ExpiredAuthException,
+  RefreshTokenException,
+  InvalidSessionException,
+  DEFINED_ERROR_NAMES,
+} = require('./exceptions');
+
+const createInternalRequestClient = (input) => {
   const addQueryParams = require('zapier-platform-core/src/http-middlewares/before/add-query-params');
   const createInjectInputMiddleware = require('zapier-platform-core/src/http-middlewares/before/inject-input');
   const createRequestClient = require('zapier-platform-core/src/tools/create-request-client');
   const disableSSLCertCheck = require('zapier-platform-core/src/http-middlewares/before/disable-ssl-cert-check');
-  const logResponse = require('zapier-platform-core/src/http-middlewares/after/log-response');
+  const logResponseModule = require('zapier-platform-core/src/http-middlewares/after/log-response');
   const prepareRequest = require('zapier-platform-core/src/http-middlewares/before/prepare-request');
   const prepareResponse = require('zapier-platform-core/src/http-middlewares/after/prepare-response');
 
+  // Before core 12.0.3, log-response.js module exported the logResponse()
+  // function, and it's the only export. Since core 12.0.3, logResponse()
+  // function is inside an exported object. So we do the following to make sure
+  // legacy-scripting-runner works before and after 12.0.3.
+  // Related PR: https://github.com/zapier/zapier-platform/pull/525
+  const logResponse =
+    typeof logResponseModule === 'function'
+      ? logResponseModule
+      : logResponseModule.logResponse;
+
   const options = {
-    skipDefaultMiddle: true
+    skipDefaultMiddle: true,
   };
   const httpBefores = [
     createInjectInputMiddleware(input),
     prepareRequest,
-    addQueryParams
+    addQueryParams,
   ];
 
   const verifySSL = _.get(input, '_zapier.event.verifySSL');
@@ -35,11 +62,15 @@ const createInternalRequestClient = input => {
 const { bundleConverter, unflattenObject } = require('./bundle');
 const {
   markFileFieldsInBundle,
-  hasFileFields,
+  isAnyFileFieldSet,
   isFileField,
-  LazyFile
+  LazyFile,
 } = require('./file');
-const middlewareFactory = require('./middleware-factory');
+const {
+  createBeforeRequest,
+  createAfterResponse,
+  renderTemplate,
+} = require('./middleware-factory');
 
 const FIELD_TYPE_CONVERT_MAP = {
   // field_type_in_wb: field_type_in_cli
@@ -52,25 +83,58 @@ const FIELD_TYPE_CONVERT_MAP = {
   int: 'integer',
   password: 'password',
   text: 'text',
-  unicode: 'string'
+  unicode: 'string',
+};
+
+const cleanCustomFields = (fields) => {
+  return fields
+    .filter((field) => _.isPlainObject(field) && field.key)
+    .map((field) => {
+      if (field.type === 'dict') {
+        // For CLI, we set field.dict to true to represet a dict field instead
+        // of setting field.type to 'dict'
+        field.dict = true;
+        delete field.list;
+      }
+      field.type = FIELD_TYPE_CONVERT_MAP[field.type] || field.type;
+      return field;
+    });
+};
+
+const stringifyForFormData = (value) => {
+  const dataType = typeof value;
+  if (dataType === 'string') {
+    return value;
+  } else if (dataType === 'boolean') {
+    return value ? 'True' : 'False'; // mimic str(true) in Python
+  }
+  return JSON.stringify(value);
 };
 
 // Makes a multipart/form-data request body that can be set to request.body for
 // node-fetch.
-const makeMultipartBody = async (data, lazyFilesObject) => {
+const makeMultipartForm = async (data, lazyFilesObject) => {
   const form = new FormData();
   if (data) {
-    if (typeof data !== 'string') {
-      data = JSON.stringify(data);
+    if (_.isPlainObject(data)) {
+      _.each(data, (v, k) => {
+        if (v !== undefined && v !== null) {
+          form.append(k, stringifyForFormData(v));
+        }
+      });
+    } else {
+      if (typeof data !== 'string') {
+        data = JSON.stringify(data);
+      }
+      form.append('data', data);
     }
-    form.append('data', data);
   }
 
   const fileFieldKeys = Object.keys(lazyFilesObject);
   const lazyFiles = Object.values(lazyFilesObject);
 
-  const fileMetas = await Promise.all(lazyFiles.map(f => f.meta()));
-  const fileStreams = await Promise.all(lazyFiles.map(f => f.readStream()));
+  const fileMetas = await Promise.all(lazyFiles.map((f) => f.meta()));
+  const fileStreams = await Promise.all(lazyFiles.map((f) => f.readStream()));
 
   _.zip(fileFieldKeys, fileMetas, fileStreams).forEach(
     ([k, meta, fileStream]) => {
@@ -84,6 +148,7 @@ const makeMultipartBody = async (data, lazyFilesObject) => {
 // Prepares request body from results.files and assign it to result.body. This
 // accepts the request object returned by a KEY_pre_ method.
 const addFilesToRequestBodyFromPreResult = async (request, event) => {
+  const originalHydrateUrls = _.map(event.originalFiles, (file, k) => file[1]);
   const lazyFiles = _.reduce(
     request.files,
     (result, file, k) => {
@@ -92,7 +157,7 @@ const addFilesToRequestBodyFromPreResult = async (request, event) => {
         const [filename, newFileValue, contentType] = file;
         // If pre_write changes the hydrate URL, file[1], we take it as a
         // string content even if it looks like a URL
-        const loadUrl = newFileValue === event.originalFiles[k][1];
+        const loadUrl = originalHydrateUrls.includes(newFileValue);
         lazyFile = LazyFile(
           newFileValue,
           { filename, contentType },
@@ -110,7 +175,11 @@ const addFilesToRequestBodyFromPreResult = async (request, event) => {
     {}
   );
 
-  request.body = await makeMultipartBody(request.data || '{}', lazyFiles);
+  delete request.headers['Content-Type'];
+
+  const form = await makeMultipartForm(request.data || '{}', lazyFiles);
+  request.body = form;
+  request.headers = { ...request.headers, ...form.getHeaders() };
   return request;
 };
 
@@ -128,23 +197,76 @@ const addFilesToRequestBodyFromBody = async (request, bundle) => {
     }
   });
 
-  request.body = await makeMultipartBody(data, lazyFiles);
+  delete request.headers['Content-Type'];
+
+  const form = await makeMultipartForm(JSON.stringify(data), lazyFiles);
+  request.body = form;
+  request.headers.Accept = '*/*';
+  request.headers = { ...request.headers, ...form.getHeaders() };
   return request;
+};
+
+const pythonSerialize = (value) => {
+  if (typeof value === 'boolean') {
+    return value ? 'True' : 'False';
+  }
+  return value.toString();
+};
+
+const encodeFormData = (data) => {
+  const parts = Object.entries(data).reduce((result, [name, value]) => {
+    let newItems;
+    if (Array.isArray(value)) {
+      newItems = value;
+    } else if (_.isPlainObject(value)) {
+      newItems = Object.keys(value);
+    } else if (value != null) {
+      newItems = [value];
+    }
+
+    if (newItems) {
+      newItems = newItems
+        .filter((v) => v != null)
+        .map(pythonSerialize)
+        .map(encodeURIComponent)
+        .map((v) => `${name}=${v}`);
+      result.push(...newItems);
+    }
+
+    return result;
+  }, []);
+  return parts.join('&');
 };
 
 const parseFinalResult = async (result, event) => {
   if (event.name.endsWith('.pre')) {
     if (!_.isEmpty(result.files)) {
-      return await addFilesToRequestBodyFromPreResult(result, event);
+      return addFilesToRequestBodyFromPreResult(result, event);
     }
 
-    // Old request was .data (string), new is .body (object), which matters for _pre
-    try {
-      result.body = JSON.parse(result.data || '{}');
-    } catch (e) {
-      result.body = result.data;
+    if (result.data) {
+      if (_.isPlainObject(result.data) && !event.name.startsWith('auth.')) {
+        // When a pre_(poll|write|search) gives an object for request.data, the
+        // data will always be form-urlencoded even if content-type is json. If
+        // the developer wants a JSON-encoded body, they need to encode the data
+        // using JSON.stringify().
+        result.body = encodeFormData(result.data);
+      } else {
+        // Old request was .data (string), new is .body (object), which matters
+        // for _pre
+        try {
+          result.body = JSON.parse(result.data);
+        } catch (e) {
+          result.body = result.data;
+        }
+      }
+    } else if (result.data === null || result.data === '') {
+      result.body = '';
     }
-    return Promise.resolve(result);
+
+    // request.data isn't really used by CLI's z.request()
+    delete result.data;
+    return result;
   }
 
   // Old writes accepted a list, but CLI doesn't anymore, which matters for _write and _post_write
@@ -157,7 +279,7 @@ const parseFinalResult = async (result, event) => {
     } else {
       resultObj = {};
     }
-    return Promise.resolve(resultObj);
+    return resultObj;
   }
 
   if (
@@ -167,30 +289,173 @@ const parseFinalResult = async (result, event) => {
     event.name.endsWith('.output.post')
   ) {
     if (Array.isArray(result)) {
-      result.forEach(field => {
-        field.type = FIELD_TYPE_CONVERT_MAP[field.type] || field.type;
-      });
+      result = cleanCustomFields(result);
+    } else {
+      result = [];
     }
   }
 
-  return Promise.resolve(result);
+  return result;
 };
 
-const replaceCurliesInRequest = (request, bundle) => {
-  const bank = cleaner.createBundleBank(undefined, { bundle: bundle });
-  return cleaner.recurseReplaceBank(request, bank);
+const serializeValueForCurlies = (value) => {
+  if (typeof value === 'boolean') {
+    return value ? 'True' : 'False';
+  } else if (Array.isArray(value)) {
+    return value.join(',');
+  } else if (_.isPlainObject(value)) {
+    // Not sure if anyone would ever expect '[object Object]', but who knows?
+    return value.toString();
+  }
+  return value;
 };
 
-const compileLegacyScriptingSource = (source, zcli, app) => {
+const createCurliesBank = (bundle, extra) => {
+  const bank = {
+    // This is for new curlies syntax, such as '{{bundle.inputData.var}}' and
+    // '{{bundle.authData.var}}'
+    bundle,
+
+    // These are for legacy curlies syntax without the 'bundle' prefix, such as
+    // {{var}}. The order matters.
+    ...bundle.inputData,
+    ...bundle.subscribeData,
+    ...bundle.authData,
+    ...extra,
+  };
+  const flattenedBank = flattenPaths(bank, {
+    perseve: {
+      'bundle.inputData': true,
+    },
+  });
+  return Object.entries(flattenedBank).reduce((coll, [key, value]) => {
+    coll[`{{${key}}}`] = serializeValueForCurlies(value);
+    return coll;
+  }, {});
+};
+
+const replaceCurliesInRequest = (request, bundle, extra) => {
+  const bank = createCurliesBank(bundle, extra);
+  return recurseReplaceBank(request, bank);
+};
+
+const cleanHeaders = (headers) => {
+  const newHeaders = {};
+  const badChars = /[\r\n\t]/g;
+  _.each(headers, (v, k) => {
+    if (k) {
+      k = k.replace(badChars, '').trim();
+    }
+    if (k) {
+      if (v && v.replace) {
+        v = v.replace(badChars, '').trim();
+      }
+      newHeaders[k] = v;
+    }
+  });
+  return newHeaders;
+};
+
+// Header keys are considered case insensitive. This function removes duplicate
+// headers.
+// dedupeHeaders({'x-key': 'one', 'X-KEY': 'two'}) returns {'x-key': 'two'}
+const dedupeHeaders = (headers) => {
+  // lowerToFirstKeys stores the mapping from lowercased keys to the key that
+  // first appears in the headers
+  const lowerToFirstKeys = {};
+
+  const newHeaders = Object.entries(headers).reduce((result, [k, v]) => {
+    const lowerKey = k.toLowerCase();
+    if (lowerToFirstKeys[lowerKey] === undefined) {
+      lowerToFirstKeys[lowerKey] = k;
+    }
+    const firstKey = lowerToFirstKeys[lowerKey];
+    result[firstKey] = v;
+    return result;
+  }, {});
+
+  return newHeaders;
+};
+
+// Move all the query params from req.url to req.params. Make arrays if there
+// are multiple values with the same name.
+const mergeQueryParams = (req) => {
+  if (!req.url) {
+    return req;
+  }
+
+  const sepIndex = req.url.indexOf('?');
+  if (sepIndex < 0) {
+    return req;
+  }
+
+  // Extract the querystring. Don't use `new URL()` because the url might have
+  // curlies.
+  const querystring = req.url.substring(sepIndex + 1);
+  const searchParams = new URLSearchParams(querystring);
+
+  // Make an object like {name: ['alice', 'bob'], team: 'test'}
+  const params = Array.from(searchParams).reduce((result, [name, value]) => {
+    if (result[name] === undefined) {
+      result[name] = value;
+      return result;
+    }
+    if (!Array.isArray(result[name])) {
+      result[name] = [result[name]];
+    }
+    result[name].push(value);
+    return result;
+  }, {});
+
+  // Copy params collected from req.url to req.params
+  req.params = _.mergeWith(params, req.params, (dst, src) => {
+    if (src === null) {
+      // Legacy WB relies on Python serializing null, ugh
+      src = 'None';
+    }
+    if (dst === undefined) {
+      return src;
+    }
+    if (Array.isArray(dst)) {
+      if (Array.isArray(src)) {
+        return dst.concat(src);
+      } else {
+        dst.push(src);
+        return dst;
+      }
+    } else {
+      if (Array.isArray(src)) {
+        return [dst].concat(src);
+      } else {
+        return [dst, src];
+      }
+    }
+  });
+
+  // Remove query params from req.url as they all should be in req.params by now
+  req.url = req.url.substring(0, sepIndex);
+  return req;
+};
+
+const pruneQueryParams = (params) => {
+  // Only prune nulls and undefined's. Keep empty strings.
+  return Object.entries(params).reduce((result, [name, value]) => {
+    if (Array.isArray(value)) {
+      result[name] = value.filter((v) => v != null);
+    } else if (value != null) {
+      result[name] = value;
+    }
+    return result;
+  }, {});
+};
+
+const compileLegacyScriptingSource = (source, zcli, app, logger) => {
   const { DOMParser, XMLSerializer } = require('xmldom');
-  const {
-    ErrorException,
-    HaltedException,
-    StopRequestException,
-    ExpiredAuthException,
-    RefreshTokenException,
-    InvalidSessionException
-  } = require('./exceptions');
+
+  const underscore = require('underscore');
+  underscore.templateSettings = {
+    interpolate: /\{\{(.+?)\}\}/g,
+  };
 
   return new Function( // eslint-disable-line no-new-func
     '_',
@@ -203,6 +468,8 @@ const compileLegacyScriptingSource = (source, zcli, app) => {
     'btoa',
     'z',
     '$',
+    'console',
+    'require',
     'ErrorException',
     'HaltedException',
     'StopRequestException',
@@ -211,7 +478,7 @@ const compileLegacyScriptingSource = (source, zcli, app) => {
     'InvalidSessionException',
     source + '\nreturn Zap;'
   )(
-    require('underscore'),
+    underscore,
     require('crypto'),
     require('async'),
     require('moment-timezone'),
@@ -219,8 +486,10 @@ const compileLegacyScriptingSource = (source, zcli, app) => {
     XMLSerializer,
     require('./atob'),
     require('./btoa'),
-    require('./zfactory')(zcli, app),
+    require('./zfactory')(zcli, app, logger),
     require('./$'),
+    zcli.console,
+    require,
     ErrorException,
     HaltedException,
     StopRequestException,
@@ -233,12 +502,12 @@ const compileLegacyScriptingSource = (source, zcli, app) => {
 const applyBeforeMiddleware = (befores, request, z, bundle) => {
   befores = befores || [];
   return befores.reduce(
-    (prev, cur) => prev.then(req => cur(req, z, bundle)),
+    (prev, cur) => prev.then((req) => cur(req, z, bundle)),
     Promise.resolve(request)
   );
 };
 
-const createEventNameToMethodMapping = key => {
+const createEventNameToMethodMapping = (key) => {
   return {
     //
     // Auth
@@ -296,23 +565,24 @@ const createEventNameToMethodMapping = key => {
     //
     // Hydration
     //
-    'hydrate.method': key
+    'hydrate.method': key,
   };
 };
 
 const legacyScriptingRunner = (Zap, zcli, input) => {
   const app = _.get(input, '_zapier.app');
+  const logger = _.get(input, '_zapier.logger');
 
   if (typeof Zap === 'string') {
-    Zap = compileLegacyScriptingSource(Zap, zcli, app);
+    Zap = compileLegacyScriptingSource(Zap, zcli, app, logger);
   }
 
   // Does string replacement ala WB, using bundle and a potential result object
   const replaceVars = (templateString, bundle, result) => {
     const options = {
-      interpolate: /{{([\s\S]+?)}}/g
+      interpolate: /{{([\s\S]+?)}}/g,
     };
-    const values = _.extend({}, bundle.authData, bundle.inputData, result);
+    const values = { ...bundle.authData, ...bundle.inputData, ...result };
     return _.template(templateString, options)(values);
   };
 
@@ -336,10 +606,18 @@ const legacyScriptingRunner = (Zap, zcli, input) => {
             }
           }
         }
+      } else if (!result) {
+        return [];
       }
       throw new Error('JSON results array could not be located.');
     } else if (type.startsWith('object-')) {
-      if (_.isPlainObject(result)) {
+      if (['number', 'string', 'boolean'].includes(typeof result)) {
+        // primitive types that aren't null or undefined
+        return { message: result };
+      } else if (_.isEmpty(result)) {
+        // null, undefined, empty object or array
+        return {};
+      } else if (_.isPlainObject(result)) {
         return result;
       } else if (
         Array.isArray(result) &&
@@ -363,8 +641,8 @@ const legacyScriptingRunner = (Zap, zcli, input) => {
         if (Array.isArray(data[i][j])) {
           data[i][j] = textifyList(data[i][j]);
         } else if (_.isPlainObject(data[i][j])) {
-          let flattened = flattenDictionary(j, data[i][j]);
-          data[i] = Object.assign(data[i], flattened);
+          const flattened = flattenDictionary(j, data[i][j]);
+          data[i] = { ...data[i], ...flattened };
           delete data[i][j];
         }
       }
@@ -379,10 +657,10 @@ const legacyScriptingRunner = (Zap, zcli, input) => {
     if (!_.isPlainObject(data)) {
       return data;
     }
-    let params = _.cloneDeep(data);
+    const params = _.cloneDeep(data);
     for (const i in data) {
       if (_.isPlainObject(data[i])) {
-        let param = [];
+        const param = [];
         for (const j in data[i]) {
           param.push(j + '|' + data[i][j]);
         }
@@ -398,7 +676,7 @@ const legacyScriptingRunner = (Zap, zcli, input) => {
     see textify_list in the python backend
   */
   const textifyList = (data) => {
-    if (!Array.isArray(data)){
+    if (!Array.isArray(data)) {
       return data;
     }
     let out = '';
@@ -425,60 +703,74 @@ const legacyScriptingRunner = (Zap, zcli, input) => {
   };
 
   const flattenDictionary = (prefix, data) => {
-    let flattenedData = flatten(_.cloneDeep(data), {'delimiter': '__'});
-    let out = {};
+    const flattenedData = flatten(_.cloneDeep(data), { delimiter: '__' });
+    const out = {};
     for (const key in flattenedData) {
       out[`${prefix}__${key}`] = flattenedData[key];
     }
     return out;
   };
 
-  const runEvent = (event, z, bundle) =>
-    new Promise((resolve, reject) => {
-      if (!Zap || _.isEmpty(Zap) || !event || !event.name || !z) {
-        resolve();
-        return;
+  const chooseBetterError = (responseError, scriptError) => {
+    if (scriptError) {
+      if (!responseError || DEFINED_ERROR_NAMES.includes(scriptError.name)) {
+        return scriptError;
       }
+    }
+    return responseError;
+  };
 
-      bundleConverter(bundle, event, z).then(convertedBundle => {
-        const eventNameToMethod = createEventNameToMethodMapping(event.key);
-        const methodName = eventNameToMethod[event.name];
+  const runEvent = async (event, z, bundle) => {
+    if (!Zap || _.isEmpty(Zap) || !event || !event.name || !z) {
+      return;
+    }
 
-        if (methodName && _.isFunction(Zap[methodName])) {
-          // Handle async
-          const optionalCallback = (err, asyncResult) => {
-            if (err) {
-              reject(err);
-            } else {
-              parseFinalResult(asyncResult, event).then(res => {
-                resolve(res);
-              });
-            }
-          };
+    const eventNameToMethod = createEventNameToMethodMapping(event.key);
+    const methodName = eventNameToMethod[event.name];
 
-          // To know if request.files is changed by scripting
-          event.originalFiles = _.cloneDeep(
-            _.get(convertedBundle, 'request.files') || {}
-          );
+    if (!methodName || !_.isFunction(Zap[methodName])) {
+      return;
+    }
 
-          let result;
-          try {
-            result = Zap[methodName](convertedBundle, optionalCallback);
-          } catch (err) {
-            reject(err);
-          }
+    const convertedBundle = await bundleConverter(bundle, event, z);
 
-          // Handle sync
-          if (result !== undefined) {
-            parseFinalResult(result, event).then(res => {
-              resolve(res);
-            });
-          }
-        } else {
-          resolve({});
-        }
+    // In case the scripting method mutates the bundle
+    const bundleForLog = _.cloneDeep(convertedBundle);
+
+    // To know if request.files is changed by scripting
+    event.originalFiles = _.cloneDeep(
+      _.get(convertedBundle, 'request.files') || {}
+    );
+
+    const method = Zap[methodName].bind(Zap);
+
+    // method.length is the number of args method accepts
+    const isAsync = method.length > 1;
+
+    let result;
+    try {
+      if (isAsync) {
+        result = await promisify(method)(convertedBundle);
+      } else {
+        result = method(convertedBundle);
+      }
+    } catch (err) {
+      logger(`Errored calling legacy scripting ${methodName}`, {
+        log_type: 'bundle',
+        input: convertedBundle,
+        error_message: err.stack,
       });
+      throw err;
+    }
+
+    logger(`Called legacy scripting ${methodName}`, {
+      log_type: 'bundle',
+      input: bundleForLog,
+      output: _.cloneDeep(result),
     });
+
+    return parseFinalResult(result, event);
+  };
 
   // Simulates how WB backend runs JS scripting methods
   const runEventCombo = async (
@@ -489,30 +781,30 @@ const legacyScriptingRunner = (Zap, zcli, input) => {
     fullEventName,
     options
   ) => {
-    options = _.extend(
-      {
-        // Options to deal with the final result returned by this function.
-        // * checkResponseStatus: throws an error if response status is not 2xx.
-        // * parseResponse:
-        //     assumes response content is JSON and parse it. post method won't
-        //     run if this is false.
-        // * ensureType: ensures the result type. Could be one of the following values:
-        //   - false:
-        //       returns whatever data parsed from response content or returned
-        //       by the post method.
-        //   - 'array-wrap': returns [result] if result is an object.
-        //   - 'array-first':
-        //       returns the first top-level array in the result if result
-        //       is an object.
-        //   - 'object-first': returns the first object if result is an array.
-        checkResponseStatus: true,
-        parseResponse: true,
-        ensureType: false,
+    options = {
+      // Options to deal with the final result returned by this function.
+      // * checkResponseStatus: throws an error if response status is not 2xx.
+      // * parseResponse:
+      //     assumes response content is JSON and parse it. post method won't
+      //     run if this is false.
+      // * ensureType: ensures the result type. Could be one of the following values:
+      //   - false:
+      //       returns whatever data parsed from response content or returned
+      //       by the post method.
+      //   - 'array-wrap': returns [result] if result is an object.
+      //   - 'array-first':
+      //       returns the first top-level array in the result if result
+      //       is an object.
+      //   - 'object-first': returns the first object if result is an array.
+      // * defaultToResponse: default to response if post method returns empty
+      checkResponseStatus: true,
+      parseResponse: true,
+      ensureType: false,
+      resetRequestForFullMethod: false,
+      defaultToResponse: false,
 
-        resetRequestForFullMethod: false,
-      },
-      options
-    );
+      ...options,
+    };
 
     if (bundle.request) {
       bundle.request = replaceCurliesInRequest(bundle.request, bundle);
@@ -538,40 +830,133 @@ const legacyScriptingRunner = (Zap, zcli, input) => {
     if (fullMethod) {
       if (options.resetRequestForFullMethod) {
         // Used by custom fields
-        _.extend(bundle.request, {
-          method: 'GET',
-          url: ''
-        });
+        bundle.request = { ...bundle.request, method: 'GET', url: '' };
       }
 
       // Running "full" scripting method like KEY_poll
-      result = await runEvent({ key, name: fullEventName }, zcli, bundle);
+      try {
+        result = await runEvent({ key, name: fullEventName }, zcli, bundle);
+      } catch (error) {
+        if (error.name === 'StopRequestError') {
+          return ensureIsType(null, options.ensureType);
+        }
+        throw error;
+      }
     } else {
       const preMethod = preMethodName ? Zap[preMethodName] : null;
-      const request = preMethod
-        ? await runEvent({ key, name: preEventName }, zcli, bundle)
-        : bundle.request;
+      let request;
+      if (preMethod) {
+        try {
+          request = await runEvent({ key, name: preEventName }, zcli, bundle);
+        } catch (error) {
+          if (error.name === 'StopRequestError') {
+            return ensureIsType(null, options.ensureType);
+          }
+          throw error;
+        }
+      } else {
+        request = {};
+      }
+
+      request = { ...bundle.request, ...request };
 
       const isBodyStream = typeof _.get(request, 'body.pipe') === 'function';
-      if (hasFileFields(bundle) && !isBodyStream) {
-        // Runs only when there's no KEY_pre_ method
+      if (!preMethod && !isBodyStream && isAnyFileFieldSet(bundle)) {
+        // Enter here only when there's no KEY_pre method. When a KEY_pre method
+        // is defined, addFilesToRequestBodyFromPreResult() already does the
+        // file handling, so we don't want to do it again here.
         await addFilesToRequestBodyFromBody(request, bundle);
+      }
+
+      // encode everything, but retain curlies - those are replaced in z.request
+      // important to maintain case here; `new URL()` lowercases the hostname,
+      // which may contain a variable like '{{process.env.URL}}'
+      request.url = encodeURI(request.url)
+        .replace(/%25/g, '%') // fixes double encoding
+        .replace(/%7B/g, '{')
+        .replace(/%7D/g, '}');
+      request.headers = cleanHeaders(request.headers);
+      request.headers = dedupeHeaders(request.headers);
+      request.allowGetBody = true;
+      request.serializeValueForCurlies = serializeValueForCurlies;
+      request.skipThrowForStatus = true;
+
+      request = mergeQueryParams(request);
+      if (request.params) {
+        request.params = pruneQueryParams(request.params);
+      }
+
+      if (_.get(app, 'legacy.skipEncodingChars')) {
+        // skipEncodingChars is only supported on core ^9.7.2, ^11.3.2 and >=12.x.
+        // core versions that don't support it will just ignore it.
+        request.skipEncodingChars = app.legacy.skipEncodingChars;
       }
 
       const response = await zcli.request(request);
 
-      if (options.checkResponseStatus) {
-        response.throwForStatus();
-      }
-
       if (!options.parseResponse) {
+        if (options.checkResponseStatus) {
+          response.skipThrowForStatus = false;
+          response.throwForStatus();
+        }
         return response;
       }
 
+      bundle.request = request;
+
       const postMethod = postMethodName ? Zap[postMethodName] : null;
-      result = postMethod
-        ? await runEvent({ key, name: postEventName, response }, zcli, bundle)
-        : zcli.JSON.parse(response.content);
+      if (postMethod) {
+        let scriptError, responseError;
+        try {
+          result = await runEvent(
+            { key, name: postEventName, response },
+            zcli,
+            bundle
+          );
+        } catch (error) {
+          scriptError = error;
+        }
+
+        if (options.checkResponseStatus) {
+          // Raising this error AFTER postMethod is executed allows devs to
+          // intercept and throw another error from postMethod
+          response.skipThrowForStatus = false;
+          try {
+            response.throwForStatus();
+          } catch (error) {
+            responseError = error;
+          }
+        }
+
+        if (responseError || scriptError) {
+          throw chooseBetterError(responseError, scriptError);
+        }
+
+        if (options.defaultToResponse && !result) {
+          try {
+            result = zcli.JSON.parse(response.content);
+          } catch {
+            result = {};
+          }
+        }
+      } else {
+        if (options.checkResponseStatus) {
+          response.skipThrowForStatus = false;
+          response.throwForStatus();
+        }
+
+        try {
+          result = zcli.JSON.parse(response.content);
+          if (postEventName) {
+            result = await parseFinalResult(result, {
+              key,
+              name: postEventName,
+            });
+          }
+        } catch {
+          result = {};
+        }
+      }
     }
 
     result = ensureIsType(result, options.ensureType);
@@ -582,107 +967,226 @@ const legacyScriptingRunner = (Zap, zcli, input) => {
     const response = await zcli.request({
       method: 'POST',
       url,
-      auth: authParams
+      auth: authParams,
+      skipThrowForStatus: true,
     });
+    response.skipThrowForStatus = false;
     response.throwForStatus();
     return querystring.parse(response.content);
   };
 
-  const runOAuth1GetRequestToken = async bundle => {
+  const runOAuth1GetRequestToken = (bundle) => {
     const url = _.get(
       app,
       'legacy.authentication.oauth1Config.requestTokenUrl'
     );
-    return await fetchOAuth1Token(url, {
-      oauth_consumer_key: process.env.CLIENT_ID,
-      oauth_consumer_secret: process.env.CLIENT_SECRET,
+
+    const templateContext = { ...bundle.authData, ...bundle.inputData };
+    const consumerKey = renderTemplate(process.env.CLIENT_ID, templateContext);
+    const consumerSecret = renderTemplate(
+      process.env.CLIENT_SECRET,
+      templateContext
+    );
+
+    return fetchOAuth1Token(url, {
+      oauth_consumer_key: consumerKey,
+      oauth_consumer_secret: consumerSecret,
       oauth_signature_method: 'HMAC-SHA1',
-      oauth_callback: bundle.inputData.redirect_uri
+      oauth_callback: bundle.inputData.redirect_uri,
     });
   };
 
-  const runOAuth1GetAccessToken = async bundle => {
-    const url = _.get(app, 'legacy.authentication.oauth1Config.accessTokenUrl');
-    return await fetchOAuth1Token(url, {
-      oauth_consumer_key: process.env.CLIENT_ID,
-      oauth_consumer_secret: process.env.CLIENT_SECRET,
+  const runOAuth1AuthorizeUrl = (bundle) => {
+    let url = _.get(app, 'legacy.authentication.oauth1Config.authorizeUrl');
+    if (!url) {
+      return '';
+    }
+
+    url = replaceCurliesInRequest({ url }, bundle, bundle.inputData).url;
+    const urlObj = new URL(url);
+
+    if (!urlObj.searchParams.has('oauth_token')) {
+      urlObj.searchParams.set('oauth_token', bundle.inputData.oauth_token);
+    }
+
+    return urlObj.href;
+  };
+
+  const runOAuth1GetAccessToken = (bundle) => {
+    let url = _.get(app, 'legacy.authentication.oauth1Config.accessTokenUrl');
+    if (url) {
+      url = replaceCurliesInRequest({ url }, bundle, bundle.inputData).url;
+    }
+
+    const templateContext = { ...bundle.authData, ...bundle.inputData };
+    const consumerKey = renderTemplate(process.env.CLIENT_ID, templateContext);
+    const consumerSecret = renderTemplate(
+      process.env.CLIENT_SECRET,
+      templateContext
+    );
+
+    return fetchOAuth1Token(url, {
+      oauth_consumer_key: consumerKey,
+      oauth_consumer_secret: consumerSecret,
       oauth_token: bundle.inputData.oauth_token,
       oauth_token_secret: bundle.inputData.oauth_token_secret,
-      oauth_verifier: bundle.inputData.oauth_verifier
+      oauth_verifier: bundle.inputData.oauth_verifier,
     });
   };
 
-  const runOAuth2GetAccessToken = bundle => {
-    const url = _.get(app, 'legacy.authentication.oauth2Config.accessTokenUrl');
+  const runOAuth2AuthorizeUrl = (bundle) => {
+    let url = _.get(app, 'legacy.authentication.oauth2Config.authorizeUrl');
+    if (!url) {
+      return '';
+    }
 
-    let request = bundle.request;
+    url = replaceCurliesInRequest({ url }, bundle, bundle.inputData).url;
+    const urlObj = new URL(url);
+
+    if (!urlObj.searchParams.has('client_id')) {
+      const templateContext = { ...bundle.authData, ...bundle.inputData };
+      const clientId = renderTemplate(process.env.CLIENT_ID, templateContext);
+      urlObj.searchParams.set('client_id', clientId);
+    }
+    if (!urlObj.searchParams.has('response_type')) {
+      urlObj.searchParams.set('response_type', 'code');
+    }
+
+    urlObj.searchParams.set('redirect_uri', bundle.inputData.redirect_uri);
+    urlObj.searchParams.set('state', bundle.inputData.state);
+
+    urlObj.searchParams.sort();
+
+    return urlObj.href;
+  };
+
+  const runOAuth2GetAccessToken = async (bundle) => {
+    let url = _.get(app, 'legacy.authentication.oauth2Config.accessTokenUrl');
+    if (url) {
+      url = replaceCurliesInRequest({ url }, bundle, bundle.inputData).url;
+    }
+
+    const request = bundle.request;
     request.method = 'POST';
     request.url = url;
     request.headers['Content-Type'] = 'application/x-www-form-urlencoded';
 
-    // Try two ways to get the token: POST with parameters in a form-encoded body. If
-    // that returns a 4xx, retry a POST with parameters in querystring.
-    const body = request.body;
-    body.code = bundle.inputData.code;
-    body.client_id = process.env.CLIENT_ID;
-    body.client_secret = process.env.CLIENT_SECRET;
-    body.redirect_uri = bundle.inputData.redirect_uri;
-    body.grant_type = 'authorization_code';
+    const origRequest = _.cloneDeep(request);
 
-    return runEventCombo(
-      bundle,
-      '',
-      'auth.oauth2.token.pre',
-      'auth.oauth2.token.post'
-    ).catch(() => {
-      request = bundle.request;
-      request.body = {};
+    const templateContext = { ...bundle.authData, ...bundle.inputData };
+    const clientId = renderTemplate(process.env.CLIENT_ID, templateContext);
+    const clientSecret = renderTemplate(
+      process.env.CLIENT_SECRET,
+      templateContext
+    );
 
-      const params = request.params;
-      params.code = bundle.inputData.code;
-      params.client_id = process.env.CLIENT_ID;
-      params.client_secret = process.env.CLIENT_SECRET;
-      params.redirect_uri = bundle.inputData.redirect_uri;
-      params.grant_type = 'authorization_code';
+    const authFieldKeys = (_.get(app, 'authentication.fields') || []).map(
+      (f) => f.key
+    );
+    authFieldKeys.push('_zapier_account_id');
 
-      return runEventCombo(
+    // In CLI, it's bundle.inputData instead of bundle.authData that has
+    // yet-to-save (auth hasn't been saved) auth fields. In WB,
+    // bundle.auth_fields always has yet-to-save auth fields.
+    bundle.authData = {
+      ..._.pick(bundle.inputData, authFieldKeys),
+      ...bundle.authData,
+    };
+
+    const params = request.params;
+    params.code = bundle.inputData.code;
+    params.client_id = clientId;
+    params.client_secret = clientSecret;
+    params.redirect_uri = bundle.inputData.redirect_uri;
+    params.grant_type = 'authorization_code';
+
+    let result;
+
+    try {
+      result = await runEventCombo(
         bundle,
         '',
         'auth.oauth2.token.pre',
-        'auth.oauth2.token.post'
+        'auth.oauth2.token.post',
+        undefined,
+        { defaultToResponse: true }
       );
-    });
+    } catch (err) {
+      if (err.name !== 'ResponseError' || Zap.pre_oauthv2_token) {
+        throw err;
+      }
+
+      bundle.request = origRequest;
+
+      const body = origRequest.body;
+      body.code = bundle.inputData.code;
+      body.client_id = clientId;
+      body.client_secret = clientSecret;
+      body.redirect_uri = bundle.inputData.redirect_uri;
+      body.grant_type = 'authorization_code';
+
+      result = await runEventCombo(
+        bundle,
+        '',
+        'auth.oauth2.token.pre',
+        'auth.oauth2.token.post',
+        undefined,
+        { defaultToResponse: true }
+      );
+    }
+
+    return result;
   };
 
-  const runOAuth2RefreshAccessToken = bundle => {
+  const runOAuth2RefreshAccessToken = async (bundle) => {
     const url = _.get(
       app,
       'legacy.authentication.oauth2Config.refreshTokenUrl'
     );
 
-    let request = bundle.request;
+    const request = bundle.request;
     request.method = 'POST';
     request.url = url;
     request.headers['Content-Type'] = 'application/x-www-form-urlencoded';
 
+    const origRequest = _.cloneDeep(request);
+
+    const templateContext = { ...bundle.authData, ...bundle.inputData };
+    const clientId = renderTemplate(process.env.CLIENT_ID, templateContext);
+    const clientSecret = renderTemplate(
+      process.env.CLIENT_SECRET,
+      templateContext
+    );
+
     const body = request.body;
-    body.client_id = process.env.CLIENT_ID;
-    body.client_secret = process.env.CLIENT_SECRET;
+    body.client_id = clientId;
+    body.client_secret = clientSecret;
     body.refresh_token = bundle.authData.refresh_token;
+    body.redirect_uri = bundle.inputData.redirect_uri;
     body.grant_type = 'refresh_token';
 
-    return runEventCombo(bundle, '', 'auth.oauth2.refresh.pre').catch(() => {
-      request = bundle.request;
-      request.body = {};
+    let result;
 
-      const params = request.params;
-      params.client_id = process.env.CLIENT_ID;
-      params.client_secret = process.env.CLIENT_SECRET;
+    try {
+      result = await runEventCombo(bundle, '', 'auth.oauth2.refresh.pre');
+    } catch (err) {
+      if (err.name !== 'ResponseError' || Zap.pre_oauthv2_refresh) {
+        throw err;
+      }
+
+      bundle.request = origRequest;
+
+      const params = origRequest.params;
+      params.client_id = clientId;
+      params.client_secret = clientSecret;
       params.refresh_token = bundle.authData.refresh_token;
+      params.redirect_uri = bundle.inputData.redirect_uri;
       params.grant_type = 'refresh_token';
 
-      return runEventCombo(bundle, '', 'auth.oauth2.refresh.pre');
-    });
+      result = await runEventCombo(bundle, '', 'auth.oauth2.refresh.pre');
+    }
+
+    return result;
   };
 
   const isTestingAuth = (bundle) => {
@@ -704,15 +1208,17 @@ const legacyScriptingRunner = (Zap, zcli, input) => {
     bundle.request.url = url;
 
     // For auth test we want to make sure we return an object instead of an array
-    const ensureType = isTestingAuth(bundle)
-      ? 'object-first'
-      : 'array-first';
+    const ensureType = isTestingAuth(bundle) ? 'object-first' : 'array-first';
 
     // Legacy WB doesn't check if trigger results have id
     bundle.skipChecks = ['triggerHasId'];
 
     if (needsFlattenedData) {
       bundle.skipChecks.push('triggerIsArray');
+    }
+
+    if (url) {
+      bundle._legacyUrl = url;
     }
 
     let result = await runEventCombo(
@@ -730,17 +1236,26 @@ const legacyScriptingRunner = (Zap, zcli, input) => {
     return result;
   };
 
-  const runCatchHook = (bundle, key) => {
+  const runCatchHook = async (bundle, key) => {
     const methodName = `${key}_catch_hook`;
-    const promise = Zap[methodName]
-      ? runEvent({ key, name: 'trigger.hook' }, zcli, bundle)
-      : Promise.resolve(bundle.cleanedRequest);
-    return promise.then(result => {
-      if (!Array.isArray(result)) {
-        result = [result];
+    let result;
+    if (Zap[methodName]) {
+      try {
+        result = await runEvent({ key, name: 'trigger.hook' }, zcli, bundle);
+      } catch (error) {
+        if (error.name === 'StopRequestError') {
+          return [];
+        }
+        throw error;
       }
-      return result;
-    });
+    } else {
+      result = bundle.cleanedRequest;
+    }
+
+    if (!Array.isArray(result)) {
+      result = [result];
+    }
+    return result;
   };
 
   const runPrePostHook = (bundle, key) => {
@@ -764,10 +1279,10 @@ const legacyScriptingRunner = (Zap, zcli, input) => {
     const shouldRunPrePostHook =
       hookType === 'notification' &&
       cleanedArray &&
-      cleanedArray.every(x => x.resource_url);
+      cleanedArray.every((x) => x.resource_url);
 
     if (shouldRunPrePostHook) {
-      const promises = cleanedArray.map(obj => {
+      const promises = cleanedArray.map((obj) => {
         const bund = _.cloneDeep(bundle);
         bund.request.url = obj.resource_url;
         return runPrePostHook(bund, key);
@@ -836,7 +1351,7 @@ const legacyScriptingRunner = (Zap, zcli, input) => {
     );
   };
 
-  const runCustomFields = (
+  const runCustomFields = async (
     bundle,
     key,
     typeOf,
@@ -848,6 +1363,9 @@ const legacyScriptingRunner = (Zap, zcli, input) => {
       preEventName = typeOf + '.pre';
       postEventName = typeOf + '.post';
       bundle.request.url = url;
+
+      // Provide bundle.raw_url and bundle.url_raw
+      bundle._legacyUrl = url;
     }
 
     if (supportFullMethod) {
@@ -856,7 +1374,7 @@ const legacyScriptingRunner = (Zap, zcli, input) => {
 
     bundle.request.method = 'GET';
 
-    return runEventCombo(
+    const fields = await runEventCombo(
       bundle,
       key,
       preEventName,
@@ -864,6 +1382,7 @@ const legacyScriptingRunner = (Zap, zcli, input) => {
       fullEventName,
       { ensureType: 'array-wrap', resetRequestForFullMethod: true }
     );
+    return cleanCustomFields(fields);
   };
 
   const runTriggerOutputFields = (bundle, key) => {
@@ -881,6 +1400,9 @@ const legacyScriptingRunner = (Zap, zcli, input) => {
     const legacyProps = _.get(app, `legacy.creates.${key}.operation`) || {};
     const needsFlattenedData = _.get(app, 'legacy.needsFlattenedData');
     const url = legacyProps.url;
+
+    // This represents the "Send to Action Endpoint URL in JSON body" checkbox.
+    // If unchecked, the action field will be in this array.
     const fieldsExcludedFromBody = legacyProps.fieldsExcludedFromBody || [];
 
     const inputFields =
@@ -904,12 +1426,19 @@ const legacyScriptingRunner = (Zap, zcli, input) => {
     bundle.request.url = url;
     bundle.request.body = body;
 
+    if (url) {
+      bundle._legacyUrl = url;
+    }
+
+    bundle._fieldsExcludedFromBody = fieldsExcludedFromBody;
+
     return runEventCombo(
       bundle,
       key,
       'create.pre',
       'create.post',
       'create.write',
+      { ensureType: 'object-first' }
     );
   };
 
@@ -934,6 +1463,10 @@ const legacyScriptingRunner = (Zap, zcli, input) => {
 
     bundle.request.url = url;
 
+    if (url) {
+      bundle._legacyUrl = url;
+    }
+
     return runEventCombo(
       bundle,
       key,
@@ -954,7 +1487,7 @@ const legacyScriptingRunner = (Zap, zcli, input) => {
       'search.resource.pre',
       'search.resource.post',
       'search.resource',
-      { parseResponseForPostMethod: true }
+      { parseResponseForPostMethod: true, ensureType: 'object-first' }
     );
   };
 
@@ -968,24 +1501,27 @@ const legacyScriptingRunner = (Zap, zcli, input) => {
     return runCustomFields(bundle, key, 'search.output', url);
   };
 
-  const runHydrateMethod = bundle => {
+  const runHydrateMethod = (bundle) => {
     const methodName = bundle.inputData.method;
     return runEvent({ name: 'hydrate.method', key: methodName }, zcli, bundle);
   };
 
-  const runHydrateFile = bundle => {
+  const runHydrateFile = (bundle) => {
     const meta = bundle.inputData.meta || {};
+
+    // Legacy z.dehydrateFile(url, request, meta) behavior: if `request`
+    // argument is provided (not null nor undefined), the dev is responsible for
+    // doing auth themselves, so we use an internal request client to avoid
+    // running the app's http middlewares.
+    const request =
+      bundle.inputData.request == null
+        ? zcli.request
+        : createInternalRequestClient(input);
+
     const requestOptions = bundle.inputData.request || {};
-
-    // Legacy z.dehydrateFile(url, request, meta) behavior: if request argument is
-    // provided, the dev is responsible for doing auth themselves, so we use an internal
-    // request client to avoid running the app's http middlewares.
-    const request = _.isEmpty(requestOptions)
-      ? zcli.request
-      : createInternalRequestClient(input);
-
     requestOptions.url = bundle.inputData.url || requestOptions.url;
     requestOptions.raw = true;
+    requestOptions.throwForStatus = true;
 
     const filePromise = request(requestOptions);
     return zcli.stashFile(filePromise, meta.length, meta.name);
@@ -997,9 +1533,12 @@ const legacyScriptingRunner = (Zap, zcli, input) => {
   const run = async (bundle, typeOf, key) => {
     let request = {
       url: '',
-      headers: {},
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json; charset=utf-8',
+      },
       params: {},
-      body: {}
+      body: {},
     };
 
     if (key) {
@@ -1019,45 +1558,49 @@ const legacyScriptingRunner = (Zap, zcli, input) => {
 
     switch (typeOf) {
       case 'auth.session':
-        return await runEvent({ name: 'auth.session' }, zcli, bundle);
+        return runEvent({ name: 'auth.session' }, zcli, bundle);
       case 'auth.connectionLabel':
-        return await runEvent({ name: 'auth.connectionLabel' }, zcli, bundle);
+        return runEvent({ name: 'auth.connectionLabel' }, zcli, bundle);
       case 'auth.oauth1.requestToken':
-        return await runOAuth1GetRequestToken(bundle);
+        return runOAuth1GetRequestToken(bundle);
+      case 'auth.oauth1.authorize':
+        return runOAuth1AuthorizeUrl(bundle);
       case 'auth.oauth1.accessToken':
-        return await runOAuth1GetAccessToken(bundle);
+        return runOAuth1GetAccessToken(bundle);
+      case 'auth.oauth2.authorize':
+        return runOAuth2AuthorizeUrl(bundle);
       case 'auth.oauth2.token':
-        return await runOAuth2GetAccessToken(bundle);
+        return runOAuth2GetAccessToken(bundle);
       case 'auth.oauth2.refresh':
-        return await runOAuth2RefreshAccessToken(bundle);
+        return runOAuth2RefreshAccessToken(bundle);
       case 'trigger':
-        return await runTrigger(bundle, key);
+        return runTrigger(bundle, key);
       case 'trigger.hook':
-        return await runHook(bundle, key);
+        return runHook(bundle, key);
       case 'trigger.hook.subscribe':
-        return await runHookSubscribe(bundle, key);
+        return runHookSubscribe(bundle, key);
       case 'trigger.hook.unsubscribe':
-        return await runHookUnsubscribe(bundle, key);
+        return runHookUnsubscribe(bundle, key);
       case 'trigger.output':
-        return await runTriggerOutputFields(bundle, key);
+        return runTriggerOutputFields(bundle, key);
       case 'create':
-        return await runCreate(bundle, key);
+        return runCreate(bundle, key);
       case 'create.input':
-        return await runCreateInputFields(bundle, key);
+        return runCreateInputFields(bundle, key);
       case 'create.output':
-        return await runCreateOutputFields(bundle, key);
+        return runCreateOutputFields(bundle, key);
       case 'search':
-        return await runSearch(bundle, key);
+        return runSearch(bundle, key);
       case 'search.resource':
-        return await runSearchResource(bundle, key);
+        return runSearchResource(bundle, key);
       case 'search.input':
-        return await runSearchInputFields(bundle, key);
+        return runSearchInputFields(bundle, key);
       case 'search.output':
-        return await runSearchOutputFields(bundle, key);
+        return runSearchOutputFields(bundle, key);
       case 'hydrate.method':
-        return await runHydrateMethod(bundle);
+        return runHydrateMethod(bundle);
       case 'hydrate.file':
-        return await runHydrateFile(bundle);
+        return runHydrateFile(bundle);
     }
 
     throw new Error(`unrecognizable typeOf '${typeOf}'`);
@@ -1065,15 +1608,15 @@ const legacyScriptingRunner = (Zap, zcli, input) => {
 
   // Dynamically generate http middlewares based on auth config. The generated
   // middleware could be a no-op if the auth doesn't require a middleware.
-  const beforeRequest = middlewareFactory.createBeforeRequest(app);
-  const afterResponse = middlewareFactory.createAfterResponse(app);
+  const beforeRequest = createBeforeRequest(app);
+  const afterResponse = createAfterResponse(app);
 
   return {
     afterResponse,
     beforeRequest,
     run,
     runEvent,
-    replaceVars
+    replaceVars,
   };
 };
 

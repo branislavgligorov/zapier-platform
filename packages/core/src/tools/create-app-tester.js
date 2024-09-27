@@ -3,26 +3,13 @@
 const createLambdaHandler = require('./create-lambda-handler');
 const resolveMethodPath = require('./resolve-method-path');
 const ZapierPromise = require('./promise');
-const { get } = require('lodash');
+const { isFunction } = require('lodash');
 const { genId } = require('./data');
-
-// this is (annoyingly) mirrored in cli/api_base, so that test functions only
-// have a storeKey when canPaginate is true. otherwise, a test would work but a
-// poll on site would fail. this is only used in test handlers
-
-const shouldPaginate = (appRaw, method) => {
-  if (method.startsWith('triggers') && method.endsWith('perform')) {
-    const methodParts = method.split('.');
-    methodParts.pop();
-    return get(appRaw, `${methodParts.join('.')}.canPaginate`);
-  }
-
-  return false;
-};
+const { shouldPaginate } = require('./should-paginate');
 
 // Convert a app handler to promise for convenience.
-const promisifyHandler = handler => {
-  return event => {
+const promisifyHandler = (handler) => {
+  return (event) => {
     return new ZapierPromise((resolve, reject) => {
       handler(event, {}, (err, resp) => {
         if (err) {
@@ -45,7 +32,21 @@ const createAppTester = (appRaw, { customStoreKey } = {}) => {
   return (methodOrFunc, bundle) => {
     bundle = bundle || {};
 
-    const method = resolveMethodPath(appRaw, methodOrFunc);
+    let method = resolveMethodPath(appRaw, methodOrFunc, false);
+    if (!method) {
+      if (isFunction(methodOrFunc)) {
+        // definitely have a function but didn't find it on the app; it's an adhoc
+        appRaw._testRequest = (z, bundle) => methodOrFunc(z, bundle);
+        method = resolveMethodPath(appRaw, appRaw._testRequest);
+      } else {
+        throw new Error(
+          `Unable to find the following on your App instance: ${JSON.stringify(
+            methodOrFunc
+          )}`
+        );
+      }
+    }
+
     const storeKey = shouldPaginate(appRaw, method)
       ? customStoreKey
         ? `testKey-${customStoreKey}`
@@ -56,7 +57,8 @@ const createAppTester = (appRaw, { customStoreKey } = {}) => {
       command: 'execute',
       method,
       bundle,
-      storeKey
+      storeKey,
+      callback_url: 'https://auth-json-server.zapier-staging.com/echo',
     };
 
     if (process.env.LOG_TO_STDOUT) {
@@ -66,7 +68,10 @@ const createAppTester = (appRaw, { customStoreKey } = {}) => {
       event.detailedLogToStdout = true;
     }
 
-    return createHandlerPromise(event).then(resp => resp.results);
+    return createHandlerPromise(event).then((resp) => {
+      delete appRaw._testRequest; // clear adHocFunc so tests can't affect each other
+      return resp.results;
+    });
   };
 };
 

@@ -12,59 +12,63 @@ module.exports = makeSchema(
       'How will we get a single object given a unique identifier/id?',
     type: 'object',
     required: ['display', 'operation'],
+    properties: {
+      display: {
+        description: 'Define how this get method will be exposed in the UI.',
+        $ref: BasicDisplaySchema.id,
+      },
+      operation: {
+        description: 'Define how this get method will work.',
+        $ref: BasicOperationSchema.id,
+      },
+    },
+    additionalProperties: false,
     examples: [
       {
         display: {
           label: 'Get Tag by ID',
-          description: 'Grab a specific Tag by ID.'
+          description: 'Grab a specific Tag by ID.',
         },
         operation: {
           perform: {
-            url: '$func$0$f$'
+            url: '$func$0$f$',
           },
           sample: {
             id: 385,
-            name: 'proactive enable ROI'
-          }
-        }
+            name: 'proactive enable ROI',
+          },
+        },
       },
       {
         display: {
           label: 'Get Tag by ID',
           description: 'Grab a specific Tag by ID.',
-          hidden: true
+          hidden: true,
         },
         operation: {
           perform: {
-            url: '$func$0$f$'
-          }
-        }
-      }
+            url: '$func$0$f$',
+          },
+        },
+      },
     ],
     antiExamples: [
       {
-        display: {
-          label: 'Get Tag by ID',
-          description: 'Grab a specific Tag by ID.'
+        example: {
+          display: {
+            label: 'Get Tag by ID',
+            description: 'Grab a specific Tag by ID.',
+          },
+          operation: {
+            perform: {
+              url: '$func$0$f$',
+            },
+          },
         },
-        operation: {
-          perform: {
-            url: '$func$0$f$'
-          }
-        }
-      }
-    ],
-    properties: {
-      display: {
-        description: 'Define how this get method will be exposed in the UI.',
-        $ref: BasicDisplaySchema.id
+        reason:
+          'Missing key from operation: sample. Note – this is valid if the resource has defined a sample.',
       },
-      operation: {
-        description: 'Define how this get method will work.',
-        $ref: BasicOperationSchema.id
-      }
-    },
-    additionalProperties: false
+    ],
   },
   [BasicDisplaySchema, BasicOperationSchema]
 );

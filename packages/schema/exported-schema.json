@@ -1,5 +1,5 @@
 {
-  "version": "8.2.1",
+  "version": "12.2.1",
   "schemas": {
     "AppSchema": {
       "id": "/AppSchema",
@@ -51,6 +51,10 @@
           "description": "All the triggers for your app. You can add your own here, or Zapier will automatically register any from the list/hook methods on your resources.",
           "$ref": "/TriggersSchema"
         },
+        "bulkReads": {
+          "description": "All of the read bulks (GETs) your app exposes to retrieve resources in batches.",
+          "$ref": "/BulkReadsSchema"
+        },
         "searches": {
           "description": "All the searches for your app. You can add your own here, or Zapier will automatically register any from the search method on your resources.",
           "$ref": "/SearchesSchema"
@@ -63,12 +67,23 @@
           "description": "All the search-or-create combos for your app. You can create your own here, or Zapier will automatically register any from resources that define a search, a create, and a get (or define a searchOrCreate directly). Register non-resource search-or-creates here as well.",
           "$ref": "/SearchOrCreatesSchema"
         },
+        "searchAndCreates": {
+          "description": "An alias for \"searchOrCreates\".",
+          "$ref": "/SearchAndCreatesSchema"
+        },
         "flags": {
           "description": "Top-level app options",
           "$ref": "/AppFlagsSchema"
         },
         "legacy": {
           "description": "**INTERNAL USE ONLY**. Zapier uses this to hold properties from a legacy Web Builder app.",
+          "type": "object",
+          "docAnnotation": {
+            "hide": true
+          }
+        },
+        "firehoseWebhooks": {
+          "description": "**INTERNAL USE ONLY**. Zapier uses this for internal webhook app configurations.",
           "type": "object",
           "docAnnotation": {
             "hide": true
@@ -104,7 +119,7 @@
       "id": "/RefResourceSchema",
       "description": "Reference a resource by key and the data it returns. In the format of: `{resource_key}.{foreign_key}(.{human_label_key})`.",
       "type": "string",
-      "pattern": "^[a-zA-Z0-9_]+(\\.[a-zA-Z0-9_]+)?(\\.[a-zA-Z0-9_]+)?$"
+      "pattern": "^[a-zA-Z0-9_]+\\.[a-zA-Z0-9_\\s\\[\\]]+(\\.[a-zA-Z0-9_\\s\\[\\]]+(,[a-zA-Z0-9_\\s\\[\\]]+)*)?$"
     },
     "FieldChoicesSchema": {
       "id": "/FieldChoicesSchema",
@@ -153,7 +168,7 @@
           "maxLength": 1000
         },
         "type": {
-          "description": "The type of this value.",
+          "description": "The type of this value. Use `string` for basic text input, `text` for a large, `<textarea>` style box, and `code` for a `<textarea>` with a fixed-width font. Field type of `file` will accept either a file object or a string. If a URL is provided in the string, Zapier will automatically make a GET for that file. Otherwise, a .txt file will be generated.",
           "type": "string",
           "enum": [
             "string",
@@ -164,7 +179,8 @@
             "datetime",
             "file",
             "password",
-            "copy"
+            "copy",
+            "code"
           ]
         },
         "required": {
@@ -194,7 +210,7 @@
           "$ref": "/FieldChoicesSchema"
         },
         "list": {
-          "description": "Can a user provide multiples of this field?",
+          "description": "Acts differently when used in inputFields vs. when used in outputFields. In inputFields: Can a user provide multiples of this field? In outputFields: Does this field return an array of items of type `type`?",
           "type": "boolean"
         },
         "children": {
@@ -229,19 +245,18 @@
       "id": "/FunctionRequireSchema",
       "description": "A path to a file that might have content like `module.exports = (z, bundle) => [{id: 123}];`.",
       "type": "object",
-      "additionalProperties": false,
       "required": ["require"],
       "properties": {
         "require": {
           "type": "string"
         }
-      }
+      },
+      "additionalProperties": false
     },
     "FunctionSourceSchema": {
       "id": "/FunctionSourceSchema",
       "description": "Source code like `{source: \"return 1 + 2\"}` which the system will wrap in a function for you.",
       "type": "object",
-      "additionalProperties": false,
       "required": ["source"],
       "properties": {
         "source": {
@@ -256,7 +271,8 @@
           },
           "description": "Function signature. Defaults to `['z', 'bundle']` if not specified."
         }
-      }
+      },
+      "additionalProperties": false
     },
     "FlatObjectSchema": {
       "id": "/FlatObjectSchema",
@@ -396,6 +412,19 @@
             }
           },
           "additionalProperties": false
+        },
+        "serializeValueForCurlies": {
+          "description": "A function to customize how to serialize a value for curlies `{{var}}` in the request object. By default, when this is unspecified, the request client only replaces curlies where variables are strings, and would throw an error for non-strings. The function should accepts a single argument as the value to be serialized and return the string representation of the argument.",
+          "$ref": "/FunctionSchema"
+        },
+        "skipThrowForStatus": {
+          "description": "If `true`, don't throw an exception for response 400 <= status < 600 automatically before resolving with the response. Defaults to `false`.",
+          "type": "boolean",
+          "default": false
+        },
+        "skipEncodingChars": {
+          "description": "Contains the characters that you want left unencoded in the query params (`req.params`). If unspecified, `z.request()` will percent-encode non-ascii characters and these reserved characters: ``:$/?#[]@$&+,;=^@`\\``.",
+          "type": "string"
         }
       },
       "additionalProperties": false
@@ -510,12 +539,16 @@
             }
           ]
         },
+        "codeParam": {
+          "description": "Define a non-standard code param Zapier should scrape instead.",
+          "type": "string"
+        },
         "scope": {
           "description": "What scope should Zapier request?",
           "type": "string"
         },
         "autoRefresh": {
-          "description": "Should Zapier include a pre-built afterResponse middleware that invokes `refreshAccessToken` when we receive a 401 response?",
+          "description": "Should Zapier invoke `refreshAccessToken` when we receive an error for a 401 response?",
           "type": "boolean"
         }
       },
@@ -561,6 +594,13 @@
       "description": "Like [/FieldsSchema](#fieldsschema) but you can provide functions to create dynamic or custom fields.",
       "$ref": "/FieldOrFunctionSchema"
     },
+    "KeySchema": {
+      "id": "/KeySchema",
+      "description": "A unique identifier for this item.",
+      "type": "string",
+      "minLength": 2,
+      "pattern": "^[a-zA-Z]+[a-zA-Z0-9_]*$"
+    },
     "ResultsSchema": {
       "id": "/ResultsSchema",
       "description": "An array of objects suitable for returning in perform calls.",
@@ -574,19 +614,30 @@
       "id": "/BasicDisplaySchema",
       "description": "Represents user information for a trigger, search, or create.",
       "type": "object",
-      "required": ["label", "description"],
       "properties": {
         "label": {
-          "description": "A short label like \"New Record\" or \"Create Record in Project\".",
+          "description": "A short label like \"New Record\" or \"Create Record in Project\". Optional if `hidden` is true.",
           "type": "string",
           "minLength": 2,
-          "maxLength": 64
+          "maxLength": 64,
+          "docAnnotation": {
+            "required": {
+              "type": "replace",
+              "value": "**yes** (with exceptions, see description)"
+            }
+          }
         },
         "description": {
-          "description": "A description of what this trigger, search, or create does.",
+          "description": "A description of what this trigger, search, or create does. Optional if `hidden` is true.",
           "type": "string",
           "minLength": 1,
-          "maxLength": 1000
+          "maxLength": 1000,
+          "docAnnotation": {
+            "required": {
+              "type": "replace",
+              "value": "**yes** (with exceptions, see description)"
+            }
+          }
         },
         "directions": {
           "description": "A short blurb that can explain how to get this working. EG: how and where to copy-paste a static hook URL into your application. Only evaluated for static webhooks.",
@@ -613,7 +664,7 @@
       "properties": {
         "resource": {
           "description": "Optionally reference and extends a resource. Allows Zapier to automatically tie together samples, lists and hooks, greatly improving the UX. EG: if you had another trigger reusing a resource but filtering the results.",
-          "$ref": "/RefResourceSchema"
+          "$ref": "/KeySchema"
         },
         "perform": {
           "description": "How will Zapier get the data? This can be a function like `(z) => [{id: 123}]` or a request like `{url: 'http...'}`.",
@@ -667,7 +718,7 @@
         },
         "resource": {
           "description": "Optionally reference and extends a resource. Allows Zapier to automatically tie together samples, lists and hooks, greatly improving the UX. EG: if you had another trigger reusing a resource but filtering the results.",
-          "$ref": "/RefResourceSchema"
+          "$ref": "/KeySchema"
         },
         "perform": {
           "description": "A function that processes the inbound webhook request.",
@@ -689,6 +740,10 @@
               "value": "**yes** (with exceptions, see description)"
             }
           }
+        },
+        "canPaginate": {
+          "description": "Does this endpoint support pagination via temporary cursor storage?",
+          "type": "boolean"
         },
         "performSubscribe": {
           "description": "Takes a URL and any necessary data from the user and subscribes. Note: this is required for public apps to ensure the best UX for the end-user. For private apps, you can ignore warnings about this property with the `--without-style` flag during `zapier push`.",
@@ -760,7 +815,7 @@
         },
         "resource": {
           "description": "Optionally reference and extends a resource. Allows Zapier to automatically tie together samples, lists and hooks, greatly improving the UX. EG: if you had another trigger reusing a resource but filtering the results.",
-          "$ref": "/RefResourceSchema"
+          "$ref": "/KeySchema"
         },
         "perform": {
           "description": "How will Zapier get the data? This can be a function like `(z) => [{id: 123}]` or a request like `{url: 'http...'}`.",
@@ -774,7 +829,7 @@
           ]
         },
         "canPaginate": {
-          "description": "Does this endpoint support a page offset?",
+          "description": "Does this endpoint support pagination via temporary cursor storage?",
           "type": "boolean"
         },
         "inputFields": {
@@ -807,7 +862,7 @@
       "properties": {
         "resource": {
           "description": "Optionally reference and extends a resource. Allows Zapier to automatically tie together samples, lists and hooks, greatly improving the UX. EG: if you had another trigger reusing a resource but filtering the results.",
-          "$ref": "/RefResourceSchema"
+          "$ref": "/KeySchema"
         },
         "perform": {
           "description": "How will Zapier get the data? This can be a function like `(z) => [{id: 123}]` or a request like `{url: 'http...'}`.",
@@ -821,7 +876,7 @@
           ]
         },
         "performResume": {
-          "description": "A function that parses data from a perform + callback to resume this action. For use with callback semantics",
+          "description": "A function that parses data from a perform (which uses z.generateCallbackUrl()) and callback request to resume this action.",
           "$ref": "/FunctionSchema"
         },
         "performGet": {
@@ -942,13 +997,6 @@
       },
       "additionalProperties": false
     },
-    "KeySchema": {
-      "id": "/KeySchema",
-      "description": "A unique identifier for this item.",
-      "type": "string",
-      "minLength": 2,
-      "pattern": "^[a-zA-Z]+[a-zA-Z0-9_]*$"
-    },
     "ResourceSchema": {
       "id": "/ResourceSchema",
       "description": "Represents a resource, which will in turn power triggers, searches, or creates.",
@@ -997,6 +1045,110 @@
       },
       "additionalProperties": false
     },
+    "BulkReadSchema": {
+      "id": "/BulkReadSchema",
+      "description": "How will Zapier fetch resources from your application?",
+      "type": "object",
+      "required": ["key", "noun", "display", "operation"],
+      "properties": {
+        "key": {
+          "description": "A key to uniquely identify a record.",
+          "$ref": "/KeySchema"
+        },
+        "noun": {
+          "description": "A noun for this read that completes the sentence \"reads all of the XXX\".",
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 255
+        },
+        "display": {
+          "description": "Configures the UI for this read bulk.",
+          "$ref": "/BasicDisplaySchema"
+        },
+        "operation": {
+          "description": "Powers the functionality for this read bulk.",
+          "$ref": "/BasicActionOperationSchema"
+        }
+      },
+      "additionalProperties": false
+    },
+    "BasicHookToPollOperationSchema": {
+      "id": "/BasicHookToPollOperationSchema",
+      "description": "Represents the inbound mechanics of hook to poll style triggers. Defers to list for fields.",
+      "type": "object",
+      "required": ["performList", "performSubscribe", "performUnsubscribe"],
+      "properties": {
+        "type": {
+          "description": "Must be explicitly set to `\"hook_to_poll\"`.",
+          "type": "string",
+          "enum": ["hook_to_poll"],
+          "required": {
+            "type": "replace",
+            "value": "**yes** (with exceptions, see description)"
+          }
+        },
+        "performList": {
+          "description": "Similar a polling trigger, but checks for new data when a webhook is received, instead of every few minutes",
+          "oneOf": [
+            {
+              "$ref": "/RequestSchema"
+            },
+            {
+              "$ref": "/FunctionSchema"
+            }
+          ]
+        },
+        "canPaginate": {
+          "description": "Does this endpoint support pagination via temporary cursor storage?",
+          "type": "boolean"
+        },
+        "performSubscribe": {
+          "description": "Takes a URL and any necessary data from the user and subscribes. ",
+          "oneOf": [
+            {
+              "$ref": "/RequestSchema"
+            },
+            {
+              "$ref": "/FunctionSchema"
+            }
+          ]
+        },
+        "performUnsubscribe": {
+          "description": "Takes a URL and data from a previous subscribe call and unsubscribes. ",
+          "oneOf": [
+            {
+              "$ref": "/RequestSchema"
+            },
+            {
+              "$ref": "/FunctionSchema"
+            }
+          ]
+        },
+        "inputFields": {
+          "description": "What should the form a user sees and configures look like?",
+          "$ref": "/DynamicFieldsSchema"
+        },
+        "outputFields": {
+          "description": "What fields of data will this return? Will use resource outputFields if missing, will also use sample if available.",
+          "$ref": "/DynamicFieldsSchema"
+        },
+        "sample": {
+          "description": "What does a sample of data look like? Will use resource sample if missing. Requirement waived if `display.hidden` is true or if this belongs to a resource that has a top-level sample",
+          "type": "object",
+          "minProperties": 1,
+          "docAnnotation": {
+            "required": {
+              "type": "replace",
+              "value": "**yes** (with exceptions, see description)"
+            }
+          }
+        }
+      },
+      "additionalProperties": false,
+      "docAnnotation": {
+        "hide": true
+      }
+    },
     "TriggerSchema": {
       "id": "/TriggerSchema",
       "description": "How will Zapier get notified of new objects?",
@@ -1025,6 +1177,9 @@
             },
             {
               "$ref": "/BasicHookOperationSchema"
+            },
+            {
+              "$ref": "/BasicHookToPollOperationSchema"
             }
           ]
         }
@@ -1066,7 +1221,7 @@
       "properties": {
         "resource": {
           "description": "Optionally reference and extends a resource. Allows Zapier to automatically tie together samples, lists and hooks, greatly improving the UX. EG: if you had another trigger reusing a resource but filtering the results.",
-          "$ref": "/RefResourceSchema"
+          "$ref": "/KeySchema"
         },
         "perform": {
           "description": "How will Zapier get the data? This can be a function like `(z) => [{id: 123}]` or a request like `{url: 'http...'}`.",
@@ -1080,7 +1235,7 @@
           ]
         },
         "performResume": {
-          "description": "A function that parses data from a perform + callback to resume this action. For use with callback semantics",
+          "description": "A function that parses data from a perform (which uses z.generateCallbackUrl()) and callback request to resume this action.",
           "$ref": "/FunctionSchema"
         },
         "performGet": {
@@ -1168,9 +1323,32 @@
         "create": {
           "description": "The key of the create that powers this search-or-create",
           "$ref": "/KeySchema"
+        },
+        "update": {
+          "description": "EXPERIMENTAL: The key of the update action (in `creates`) that will be used if a search succeeds.",
+          "$ref": "/KeySchema"
+        },
+        "updateInputFromSearchOutput": {
+          "description": "EXPERIMENTAL: A mapping where the key represents the input field for the update action, and the value represents the field from the search action's output that should be mapped to the update action's input field.",
+          "$ref": "/FlatObjectSchema"
+        },
+        "searchUniqueInputToOutputConstraint": {
+          "description": "EXPERIMENTAL: A mapping where the key represents an input field for the search action, and the value represents how that field's value will be used to filter down the search output for an exact match.",
+          "type": "object"
         }
       },
       "additionalProperties": false
+    },
+    "SearchOrCreatesSchema": {
+      "id": "/SearchOrCreatesSchema",
+      "description": "Enumerates the search-or-creates your app has available for users.",
+      "type": "object",
+      "patternProperties": {
+        "^[a-zA-Z]+[a-zA-Z0-9_]*$": {
+          "description": "Any unique key can be used and its values will be validated against the SearchOrCreateSchema.",
+          "$ref": "/SearchOrCreateSchema"
+        }
+      }
     },
     "AuthenticationSchema": {
       "id": "/AuthenticationSchema",
@@ -1245,6 +1423,18 @@
       },
       "additionalProperties": false
     },
+    "BulkReadsSchema": {
+      "id": "/BulkReadsSchema",
+      "description": "Enumerates the bulk reads your app exposes.",
+      "type": "object",
+      "patternProperties": {
+        "^[a-zA-Z]+[a-zA-Z0-9_]*$": {
+          "description": "Any unique key can be used and its values will be validated against the BulkReadSchema.",
+          "$ref": "/BulkReadSchema"
+        }
+      },
+      "additionalProperties": false
+    },
     "TriggersSchema": {
       "id": "/TriggersSchema",
       "description": "Enumerates the triggers your app has available for users.",
@@ -1279,9 +1469,9 @@
         }
       }
     },
-    "SearchOrCreatesSchema": {
-      "id": "/SearchOrCreatesSchema",
-      "description": "Enumerates the search-or-creates your app has available for users.",
+    "SearchAndCreatesSchema": {
+      "id": "/SearchAndCreatesSchema",
+      "description": "Alias for /SearchOrCreatesSchema",
       "type": "object",
       "patternProperties": {
         "^[a-zA-Z]+[a-zA-Z0-9_]*$": {
@@ -1326,11 +1516,15 @@
     },
     "AppFlagsSchema": {
       "id": "/AppFlagsSchema",
-      "description": "Codifies high-level options for your app.",
+      "description": "Codifies high-level options for your integration.",
       "type": "object",
       "properties": {
         "skipHttpPatch": {
           "description": "By default, Zapier patches the core `http` module so that all requests (including those from 3rd-party SDKs) can be logged. Set this to true if you're seeing issues using an SDK (such as AWS).",
+          "type": "boolean"
+        },
+        "skipThrowForStatus": {
+          "description": "Starting in `core` version `10.0.0`, `response.throwForStatus()` was called by default. We introduced a per-request way to opt-out of this behavior. This flag takes that a step further and controls that behavior integration-wide **for requests made using `z.request()`**. Unless they specify otherwise (per-request, or via middleware), [Shorthand requests](https://github.com/zapier/zapier-platform/blob/master/packages/cli/README.md#shorthand-http-requests) _always_ call `throwForStatus()`. `z.request()` calls can also ignore this flag if they set `skipThrowForStatus` directly",
           "type": "boolean"
         }
       },

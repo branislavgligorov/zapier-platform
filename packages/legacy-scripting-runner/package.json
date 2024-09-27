@@ -1,46 +1,43 @@
 {
   "name": "zapier-platform-legacy-scripting-runner",
-  "version": "3.1.0",
+  "version": "3.8.11",
   "description": "Zapier's Legacy Scripting Runner, used by Web Builder apps converted to CLI.",
-  "repository": "zapier/zapier-platform-legacy-scripting-runner",
-  "homepage": "https://zapier.com/",
-  "author": "Zapier <partners@zapier.com>",
-  "license": "UNLICENSED",
+  "repository": "zapier/zapier-platform",
+  "homepage": "https://platform.zapier.com/",
+  "author": "Zapier Engineering <contact@zapier.com>",
+  "license": "SEE LICENSE IN LICENSE",
   "main": "index.js",
   "files": [
     "/*.js"
   ],
   "scripts": {
-    "lint": "node_modules/.bin/eslint .",
-    "test": "CLIENT_ID=1234 CLIENT_SECRET=asdf AWS_ACCESS_KEY_ID=fake AWS_SECRET_ACCESS_KEY=fake mocha --recursive -t 10000",
-    "posttest": "yarn lint",
+    "lint": "eslint .",
+    "test": "CLIENT_ID=1234 CLIENT_SECRET=asdf AWS_ACCESS_KEY_ID=fake AWS_SECRET_ACCESS_KEY=fake mocha --recursive -t 20s --exit",
     "preversion": "git pull",
     "postversion": "git push && git push --tags",
-    "ci-test": "yarn test && ./ci-test.js"
+    "ci-test": "yarn test && ./ci-test.js",
+    "validate": "yarn test && yarn lint"
   },
   "engines": {
     "node": ">=8.10.0",
     "npm": ">=5.6.0"
   },
   "dependencies": {
-    "async": "2.6.1",
-    "cheerio": "1.0.0-rc.2",
-    "deasync": "0.1.12",
-    "flat": "4.1.0",
-    "jquery-param": "1.0.1",
-    "lodash": "4.17.11",
-    "moment-timezone": "0.5.17",
-    "request": "2.87.0",
+    "async": "2.6.4",
+    "flat": "5.0.1",
+    "jquery": "2.1.4",
+    "jsdom": "7.0.0",
+    "lodash": "4.17.21",
+    "moment-timezone": "0.5.35",
+    "node-fetch": "2.6.7",
+    "request": "2.88.2",
+    "synckit": "0.6.0",
     "underscore": "1.4.4",
-    "xmldom": "0.1.27"
+    "xmldom": "0.3.0"
   },
   "devDependencies": {
-    "aws-sdk": "2.140.0",
-    "eslint": "4.9.0",
-    "eslint-plugin-zapier": "3.1.0",
-    "mocha": "5.2.0",
-    "nock": "10.0.6",
-    "should": "13.0.1",
-    "zapier-platform-core": "^7.6.0"
+    "aws-sdk": "^2.868.0",
+    "nock": "13.0.11",
+    "zapier-platform-core": ">=7.6.0"
   }
 }

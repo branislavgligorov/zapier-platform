@@ -1,14 +1,10 @@
 'use strict';
 
-const throwForStatus = resp => {
-  if (resp.status > 300) {
-    const message = `Got ${resp.status} calling ${resp.request.method} ${
-      resp.request.url
-    }, expected 2xx.`;
-    throw new Error(message);
+const throwForStatusMiddleware = (response) => {
+  if (!response.skipThrowForStatus) {
+    response.throwForStatus();
   }
-
-  return resp;
+  return response;
 };
 
-module.exports = throwForStatus;
+module.exports = throwForStatusMiddleware;

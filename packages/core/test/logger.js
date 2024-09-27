@@ -1,177 +1,222 @@
 'use strict';
 
 require('should');
+const nock = require('nock');
+
 const createlogger = require('../src/tools/create-logger');
 const querystring = require('querystring');
 const { Headers } = require('node-fetch');
 const {
-  replaceHeaders
+  replaceHeaders,
 } = require('../src/http-middlewares/after/middleware-utils');
+
+const { FAKE_LOG_URL, mockLogServer } = require('./tools/mocky');
+const {
+  prepareRequestLog,
+} = require('../src/http-middlewares/after/log-response');
+
+// little helper to prepare a req/res pair like the http logger does
+const prepareTestRequest = ({
+  reqBody = {},
+  resBody = {},
+  reqQueryParams = '',
+} = {}) =>
+  prepareRequestLog(
+    {
+      url: `http://example.com${
+        reqQueryParams ? '?' + querystring.stringify(reqQueryParams) : ''
+      }`,
+      method: 'POST',
+      headers: {
+        accept: 'application/json',
+      },
+      // we usually stringify this in prepare-request.coerceBody, so mirror that behavior here
+      body: JSON.stringify(reqBody),
+    },
+    {
+      status: 200,
+      headers: {
+        'content-type': 'application/json',
+      },
+
+      content: resBody,
+    }
+  );
 
 describe('logger', () => {
   const options = {
-    endpoint: 'https://httpbin.org/post',
-    token: 'fake-token'
+    endpoint: `${FAKE_LOG_URL}/input`,
+    token: 'fake-token',
   };
 
-  // httpbin/post echoes all the input body and headers in the response
+  beforeEach(() => {
+    // This fake log server echoes the input request in the response
+    mockLogServer();
+  });
 
-  it('should log to graylog', () => {
+  it('should log to graylog', async () => {
     const event = {};
     const logger = createlogger(event, options);
     const data = { key: 'val' };
 
-    return logger('test', data).then(response => {
-      response.headers.get('content-type').should.eql('application/json');
-      response.status.should.eql(200);
-      response.content.json.should.eql({
-        token: options.token,
-        message: 'test',
-        data: {
-          log_type: 'console',
-          key: 'val'
-        }
-      });
-    });
+    logger('test', data);
+    const response = await logger.end(1000);
+    response.status.should.eql(200);
+    response.content.contentType.should.containEql('application/x-ndjson');
+    response.content.token.should.eql(options.token);
+    response.content.logs.should.deepEqual([
+      { message: 'test', data: { log_type: 'console', key: 'val' } },
+    ]);
   });
 
-  it('should include bundle meta', () => {
+  it('should include bundle meta', async () => {
     const logExtra = {
-      'meta-key': 'meta-value'
+      'meta-key': 'meta-value',
     };
 
     const logger = createlogger({ logExtra }, options);
 
-    return logger('test').then(response => {
-      response.status.should.eql(200);
-      response.content.json.should.eql({
-        token: options.token,
+    logger('test');
+    const response = await logger.end(1000);
+    response.status.should.eql(200);
+    response.content.token.should.eql(options.token);
+    response.content.logs.should.deepEqual([
+      {
         message: 'test',
-        data: {
-          log_type: 'console',
-          'meta-key': 'meta-value'
-        }
-      });
-    });
-  });
-
-  it('should replace auth data', () => {
-    const bundle = {
-      authData: {
-        password: 'secret',
-        key: 'notell'
-      }
-    };
-    const logger = createlogger({ bundle }, options);
-
-    const data = bundle.authData;
-
-    return logger('test', data).then(response => {
-      response.status.should.eql(200);
-      response.content.json.should.eql({
-        token: options.token,
-        message: 'test',
-        data: {
-          password: ':censored:6:a5023f748d:',
-          log_type: 'console',
-          key: ':censored:6:8f63f9ff57:'
-        }
-      });
-    });
-  });
-
-  it('should censor auth headers', () => {
-    const bundle = {
-      authData: {
-        key: 'verysecret'
+        data: { log_type: 'console', 'meta-key': 'meta-value' },
       },
-      headers: {
-        request_headers: {
-          authorization: 'basic dmVyeXNlY3JldA=='
-        },
-        response_headers: {
-          Authorization: 'basic OnZlcnlzZWNyZXRwbGVhc2U='
-        }
-      }
-    };
-    const logger = createlogger({ bundle }, options);
-
-    return logger('123 from url google.com', bundle.headers).then(response => {
-      response.status.should.eql(200);
-      const j = response.content.json;
-      j.data.request_headers.should.eql(
-        'authorization: basic :censored:10:d98440830f:'
-      );
-      j.data.response_headers.should.eql(
-        'Authorization: :censored:30:f914b1b0d1:'
-      );
-    });
+    ]);
   });
 
-  it('should work with header class', () => {
-    const bundle = {
-      authData: {
-        key: 'verysecret'
-      },
-      headers: {
-        request_headers: replaceHeaders({
-          headers: new Headers({
-            authorization: 'basic dmVyeXNlY3JldA=='
-          })
-        }).headers,
-        response_headers: replaceHeaders({
-          headers: new Headers({
-            Authorization: 'basic OnZlcnlzZWNyZXRwbGVhc2U='
-          })
-        }).headers
-      }
-    };
-    const logger = createlogger({ bundle }, options);
-
-    return logger('123 from url google.com', bundle.headers).then(response => {
-      response.status.should.eql(200);
-      const j = response.content.json;
-      j.data.request_headers.should.eql(
-        'authorization: basic :censored:10:d98440830f:'
-      );
-      // Headers class downcases everything
-      j.data.response_headers.should.eql(
-        'authorization: :censored:30:f914b1b0d1:'
-      );
-    });
-  });
-
-  it('should refuse to log headers that arrived as strings', () => {
-    const bundle = {
-      authData: {
-        key: 'verysecret'
-      },
-      headers: {
-        request_headers: 'authorization: basic dmVyeXNlY3JldA==',
-        response_headers: 'authorization: basic dmVyeXNlY3JldA=='
-      }
-    };
-    const logger = createlogger({ bundle }, options);
-
-    return logger('123 from url google.com', bundle.headers).then(response => {
-      response.status.should.eql(200);
-      const j = response.content.json;
-      j.data.request_headers.should.eql(
-        'ERR - refusing to log possibly uncensored headers'
-      );
-      j.data.response_headers.should.eql(
-        'ERR - refusing to log possibly uncensored headers'
-      );
-    });
-  });
-
-  it('should replace sensitive data inside strings', () => {
+  it('should replace auth data', async () => {
     const bundle = {
       authData: {
         password: 'secret',
         key: 'notell',
-        api_key: 'pa$$word'
-      }
+      },
+    };
+    const logger = createlogger({ bundle }, options);
+    const data = bundle.authData;
+
+    logger('test', data);
+    const response = await logger.end(1000);
+    response.status.should.eql(200);
+    response.content.token.should.eql(options.token);
+    response.content.logs.should.deepEqual([
+      {
+        message: 'test',
+        data: {
+          password: ':censored:6:57a71b6062:',
+          log_type: 'console',
+          key: ':censored:6:e3b0ee5182:',
+        },
+      },
+    ]);
+  });
+
+  it('should censor auth headers', async () => {
+    const bundle = {
+      authData: {
+        key: 'verysecret',
+      },
+      headers: {
+        request_headers: {
+          authorization: 'basic dmVyeXNlY3JldA==',
+        },
+        response_headers: {
+          Authorization: 'basic OnZlcnlzZWNyZXRwbGVhc2U=',
+        },
+      },
+    };
+    const logger = createlogger({ bundle }, options);
+
+    logger('123 from google.com', bundle.headers);
+    const response = await logger.end(1000);
+    response.status.should.eql(200);
+    response.content.token.should.eql(options.token);
+    response.content.logs.should.deepEqual([
+      {
+        message: '123 from google.com',
+        data: {
+          log_type: 'console',
+          request_headers: 'authorization: basic :censored:10:cf265ec679:',
+          response_headers: 'Authorization: :censored:30:2a1f21f809:',
+        },
+      },
+    ]);
+  });
+
+  it('should work with header class', async () => {
+    const bundle = {
+      authData: {
+        key: 'verysecret',
+      },
+      headers: {
+        request_headers: replaceHeaders({
+          headers: new Headers({
+            authorization: 'basic dmVyeXNlY3JldA==',
+          }),
+        }).headers,
+        response_headers: replaceHeaders({
+          headers: new Headers({
+            Authorization: 'basic OnZlcnlzZWNyZXRwbGVhc2U=',
+          }),
+        }).headers,
+      },
+    };
+    const logger = createlogger({ bundle }, options);
+
+    logger('123 from url google.com', bundle.headers);
+    const response = await logger.end(1000);
+    response.status.should.eql(200);
+    response.content.token.should.eql(options.token);
+    response.content.logs.should.deepEqual([
+      {
+        message: '123 from url google.com',
+        data: {
+          log_type: 'console',
+          request_headers: 'authorization: basic :censored:10:cf265ec679:',
+          response_headers: 'authorization: :censored:30:2a1f21f809:',
+        },
+      },
+    ]);
+  });
+
+  it('should refuse to log headers that arrived as strings', async () => {
+    const bundle = {
+      authData: {
+        key: 'verysecret',
+      },
+      headers: {
+        request_headers: 'authorization: basic dmVyeXNlY3JldA==',
+        response_headers: 'authorization: basic dmVyeXNlY3JldA==',
+      },
+    };
+    const logger = createlogger({ bundle }, options);
+
+    logger('123 from url google.com', bundle.headers);
+    const response = await logger.end(1000);
+    response.status.should.eql(200);
+    response.content.token.should.eql(options.token);
+    response.content.logs.should.deepEqual([
+      {
+        message: '123 from url google.com',
+        data: {
+          log_type: 'console',
+          request_headers: 'ERR - refusing to log possibly uncensored headers',
+          response_headers: 'ERR - refusing to log possibly uncensored headers',
+        },
+      },
+    ]);
+  });
+
+  it('should replace sensitive data inside strings', async () => {
+    const bundle = {
+      authData: {
+        password: 'secret',
+        key: 'notell',
+        api_key: 'pa$$word',
+      },
     };
     const logger = createlogger({ bundle }, options);
 
@@ -181,170 +226,317 @@ describe('logger', () => {
         "somethingElse": "notell",
       }`,
       request_url: `https://test.com/?${querystring.stringify({
-        api_key: 'pa$$word'
-      })}`
+        // should be parsed out
+        api_key: 'uniquevalue',
+      })}`,
     };
 
-    return logger('test', data).then(response => {
-      response.status.should.eql(200);
-      response.content.json.should.eql({
-        token: options.token,
+    logger('test', data);
+    const response = await logger.end(1000);
+    response.status.should.eql(200);
+    response.content.token.should.eql(options.token);
+    response.content.logs.should.deepEqual([
+      {
         message: 'test',
         data: {
+          log_type: 'console',
           response_content: `{
-        "something": ":censored:6:a5023f748d:",
-        "somethingElse": ":censored:6:8f63f9ff57:",
+        "something": ":censored:6:57a71b6062:",
+        "somethingElse": ":censored:6:e3b0ee5182:",
       }`,
-          request_url: 'https://test.com/?api_key=:censored:8:f274744218:',
-          log_type: 'console'
-        }
-      });
-    });
-  });
-
-  it('should replace sensitive data inside response', () => {
-    const bundle = {
-      authData: {
-        refresh_token: 'whatever'
-      }
-    };
-    const logger = createlogger({ bundle }, options);
-
-    const data = {
-      response_json: {
-        access_token: 'super_secret',
-        PASSWORD: 'top_secret',
-        name: 'not so secret'
+          request_url: 'https://test.com/?api_key=:censored:11:94aca9077b:',
+        },
       },
-      response_content: `{
-        "access_token": "super_secret",
-        "PASSWORD": "top_secret",
-        "name": "not so secret"
-      }`
-    };
-
-    return logger('test', data).then(response => {
-      response.status.should.eql(200);
-      response.content.json.should.eql({
-        token: options.token,
-        message: 'test',
-        data: {
-          response_json: {
-            access_token: ':censored:12:8e4a58294b:',
-            PASSWORD: ':censored:10:b0c55acfea:',
-            name: 'not so secret'
-          },
-          response_content: `{
-        "access_token": ":censored:12:8e4a58294b:",
-        "PASSWORD": ":censored:10:b0c55acfea:",
-        "name": "not so secret"
-      }`,
-          log_type: 'console'
-        }
-      });
-    });
+    ]);
   });
 
-  it('should replace sensitive data that is not a string', () => {
+  it('should replace novel sensitive data', async () => {
+    // this test should, as closely as possible, match what we actually log after an http request from z.request
     const bundle = {
       authData: {
-        numerical_token: 314159265
-      }
+        refresh_token: 'very_secret',
+      },
+    };
+    const logger = createlogger({ bundle }, options);
+
+    const { message, data } = prepareTestRequest({
+      reqBody: {
+        // value appears only here; logger needs to parse this out of a string to censor it properly
+        access_token: 'super_secret',
+        refresh_token: bundle.authData.refresh_token,
+      },
+      resBody: {
+        // same here
+        access_token: 'some new token',
+      },
+      reqQueryParams: { api_key: 'secret-key' },
+    });
+
+    logger(message, data);
+    const response = await logger.end(1000);
+    response.status.should.eql(200);
+
+    response.content.logs.should.deepEqual([
+      {
+        message: '200 POST http://example.com',
+        data: {
+          log_type: 'http',
+          request_type: 'devplatform-outbound',
+          request_url: 'http://example.com',
+          request_params: 'api_key=:censored:10:ad15d65bcc:',
+          request_method: 'POST',
+          request_headers: 'accept: application/json',
+          request_data:
+            '{"access_token":":censored:12:94a59e640f:","refresh_token":":censored:11:abafa91900:"}',
+          request_via_client: true,
+          response_status_code: 200,
+          response_headers: 'content-type: application/json',
+          response_content: '{"access_token":":censored:14:777829d1c1:"}',
+        },
+      },
+    ]);
+  });
+
+  it('should handle missing bits of the request/response', async () => {
+    // this test should, as closely as possible, match what we actually log after an http request from z.request
+    const bundle = {
+      authData: {
+        refresh_token: 'very_secret',
+      },
+    };
+    const logger = createlogger({ bundle }, options);
+
+    const { message, data } = prepareTestRequest({
+      reqBody: {
+        refresh_token: bundle.authData.refresh_token,
+      },
+    });
+
+    logger(message, data);
+    const response = await logger.end(1000);
+    response.status.should.eql(200);
+
+    response.content.logs.should.deepEqual([
+      {
+        message: '200 POST http://example.com',
+        data: {
+          log_type: 'http',
+          request_type: 'devplatform-outbound',
+          request_url: 'http://example.com',
+          request_method: 'POST',
+          request_headers: 'accept: application/json',
+          request_data: '{"refresh_token":":censored:11:abafa91900:"}',
+          request_via_client: true,
+          response_status_code: 200,
+          response_headers: 'content-type: application/json',
+          response_content: '{}',
+        },
+      },
+    ]);
+  });
+
+  it('should replace sensitive data that is not a string', async () => {
+    const bundle = {
+      authData: {
+        numerical_token: 314159265,
+      },
     };
     const logger = createlogger({ bundle }, options);
 
     const data = {
-      response_json: {
-        hello: 314159265
+      whatever: {
+        hello: 314159265,
       },
       response_content: `{
         "hello": 314159265
-      }`
+      }`,
     };
 
-    return logger('test', data).then(response => {
-      response.status.should.eql(200);
-      response.content.json.should.eql({
-        token: options.token,
+    logger('test', data);
+    const response = await logger.end(1000);
+    response.status.should.eql(200);
+    response.content.token.should.eql(options.token);
+    response.content.logs.should.deepEqual([
+      {
         message: 'test',
         data: {
-          response_json: {
-            hello: ':censored:9:9cb84e8ccc:'
+          whatever: {
+            hello: ':censored:9:0caea7fafe:',
           },
           response_content: `{
-        "hello": :censored:9:9cb84e8ccc:
+        "hello": :censored:9:0caea7fafe:
       }`,
-          log_type: 'console'
-        }
-      });
-    });
+          log_type: 'console',
+        },
+      },
+    ]);
   });
 
   // this test fails because the function that creates the sensitive bank doesn't
   // recurse to find all sensitive values
-  it.skip('should replace sensitive data that nested', () => {
+  it('should replace sensitive data that is nested', async () => {
     const bundle = {
       authData: {
-        nested: { secret: 8675309 }
-      }
+        nested: { secret: 8675309 },
+      },
     };
     const logger = createlogger({ bundle }, options);
 
     const data = {
-      response_json: {
-        nested: { secret: 8675309 }
+      whatever: {
+        nested: { secret: 8675309 },
       },
       response_content: `{
         nested: { secret: 8675309 }
-      }`
+      }`,
     };
 
-    return logger('test', data).then(response => {
-      response.status.should.eql(200);
-      response.content.json.should.eql({
-        token: options.token,
+    logger('test', data);
+    const response = await logger.end(1000);
+    response.status.should.eql(200);
+    response.content.token.should.eql(options.token);
+    response.content.logs.should.deepEqual([
+      {
         message: 'test',
         data: {
-          response_json: {
+          whatever: {
             nested: {
-              secret: ':censored:9:9cb84e8ccc:'
-            }
+              secret: ':censored:7:b69a1db63d:',
+            },
           },
           response_content: `{
-        nested: { secret: :censored:9:9cb84e8ccc: }
+        nested: { secret: :censored:7:b69a1db63d: }
       }`,
-          log_type: 'console'
-        }
-      });
-    });
+          log_type: 'console',
+        },
+      },
+    ]);
   });
 
-  it('should not replace safe log keys', () => {
+  it('should not replace safe log keys', async () => {
     const bundle = {
       authData: {
         password: 'secret',
-        key: '123456789'
-      }
+        key: '123456789',
+      },
     };
     const logExtra = {
-      customuser_id: '123456789' // This is a safe log key
+      customuser_id: '123456789', // customuser_id is an explicit safe log key
     };
     const logger = createlogger({ bundle, logExtra }, options);
 
     const data = bundle.authData;
 
-    return logger('test', data).then(response => {
-      response.status.should.eql(200);
-      response.content.json.should.eql({
-        token: options.token,
+    logger('test', data);
+    const response = await logger.end(1000);
+    response.status.should.eql(200);
+    response.content.token.should.eql(options.token);
+    response.content.logs.should.deepEqual([
+      {
         message: 'test',
         data: {
-          password: ':censored:6:a5023f748d:',
+          password: ':censored:6:57a71b6062:',
           log_type: 'console',
-          key: ':censored:9:699f352527:',
-          customuser_id: logExtra.customuser_id
-        }
-      });
-    });
+          key: ':censored:9:f0d5b7b789:',
+          customuser_id: logExtra.customuser_id,
+        },
+      },
+    ]);
+  });
+
+  it('should not replace safe urls', async () => {
+    const bundle = {
+      authData: {
+        password: 'https://a-url-like.password.com',
+        safe_url: 'https://example.com',
+        basic_auth_url: 'https://foo:bar@example.com',
+        param_url: 'https://example.com?foo=bar',
+      },
+    };
+    const logger = createlogger({ bundle }, options);
+
+    const data = bundle.authData;
+
+    logger('200 GET https://example.com/test', data);
+    const response = await logger.end(1000);
+    response.status.should.eql(200);
+    response.content.token.should.eql(options.token);
+    response.content.logs.should.deepEqual([
+      {
+        message: '200 GET https://example.com/test',
+        data: {
+          log_type: 'console',
+          password: ':censored:31:0dbc81268a:',
+          // Only safe_url (no basic auth or query params) should be left
+          // uncensored
+          safe_url: 'https://example.com',
+          basic_auth_url: ':censored:27:bad5875ee0:',
+          param_url: ':censored:27:9d59e27abe:',
+        },
+      },
+    ]);
+  });
+
+  it('should handle nullish values', async () => {
+    const bundle = {
+      authData: {
+        password: 'hunter2',
+        will_be_left_alone: null,
+        will_be_removed: undefined, // JSON.stringify removed keys set to `undefined`
+      },
+    };
+    const logger = createlogger({ bundle }, options);
+
+    const data = bundle.authData;
+
+    logger('200 GET https://example.com/test', data);
+    const response = await logger.end(1000);
+    response.status.should.eql(200);
+    response.content.token.should.eql(options.token);
+    response.content.logs.should.deepEqual([
+      {
+        message: '200 GET https://example.com/test',
+        data: {
+          log_type: 'console',
+          password: ':censored:7:850233b460:',
+          will_be_left_alone: null,
+        },
+      },
+    ]);
+  });
+
+  it('should send multiple logs in a request', async () => {
+    const logger = createlogger({}, options);
+
+    logger('hello 1', { customuser_id: 1 });
+    logger('hello 2', { customuser_id: 2 });
+    logger('hello 3', { customuser_id: 3 });
+
+    const response = await logger.end(1000);
+    response.status.should.eql(200);
+    response.content.token.should.eql(options.token);
+    response.content.logs.should.deepEqual([
+      { message: 'hello 1', data: { log_type: 'console', customuser_id: 1 } },
+      { message: 'hello 2', data: { log_type: 'console', customuser_id: 2 } },
+      { message: 'hello 3', data: { log_type: 'console', customuser_id: 3 } },
+    ]);
+  });
+
+  it('should not wait for server to respond', async function () {
+    nock.cleanAll();
+    mockLogServer(1000); // simulates a slow server
+
+    // This test should be fast
+    this.timeout(100);
+
+    const logger = createlogger({}, options);
+
+    logger('hello 1', { customuser_id: 1 });
+    logger('hello 2', { customuser_id: 2 });
+    logger('hello 3', { customuser_id: 3 });
+
+    const response = await logger.end(0); // should return immediately
+    response.status.should.eql(200);
+    response.content.should.eql('aborted');
   });
 });

@@ -9,6 +9,17 @@ module.exports = makeSchema({
   items: {
     type: 'object',
     // TODO: require id, ID, Id property?
-    minProperties: 1
-  }
+    minProperties: 1,
+  },
+  examples: [[{ name: 'Alex Trebek' }]],
+  antiExamples: [
+    {
+      example: 1,
+      reason: 'Invalid type (must be array)',
+    },
+    {
+      example: [1],
+      reason: 'Invalid type (must be array of objects)',
+    },
+  ],
 });

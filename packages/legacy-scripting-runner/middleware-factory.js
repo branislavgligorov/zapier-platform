@@ -20,40 +20,68 @@ const renderTemplate = (templateString, context) => {
   return _.template(templateString, options)(finalContext);
 };
 
-const createBeforeRequest = app => {
+const getLowerHeaders = (headers) =>
+  Object.entries(headers).reduce((result, [k, v]) => {
+    result[k.toLowerCase()] = v;
+    return result;
+  }, {});
+
+const renderAuthMapping = (authMapping, authData) => {
+  if (_.isEmpty(authMapping)) {
+    return authData;
+  }
+  return Object.entries(authMapping).reduce((result, [k, v]) => {
+    result[k] = renderTemplate(v, authData);
+    return result;
+  }, {});
+};
+
+const applyAuthMappingInHeaders = (authMapping, req, authData) => {
+  const rendered = renderAuthMapping(authMapping, authData);
+  const lowerHeaders = getLowerHeaders(req.headers);
+  Object.entries(rendered).forEach(([k, v]) => {
+    const lowerKey = k.toLowerCase();
+    if (!lowerHeaders[lowerKey]) {
+      req.headers[k] = v;
+    }
+  });
+};
+
+const applyAuthMappingInQuerystring = (authMapping, req, authData) => {
+  const rendered = renderAuthMapping(authMapping, authData);
+  Object.entries(rendered).forEach(([k, v]) => {
+    req.params[k] = req.params[k] || v;
+  });
+};
+
+const createBeforeRequest = (app) => {
   const authType = _.get(app, 'authentication.type');
   const authMapping = _.get(app, 'legacy.authentication.mapping');
   const placement = _.get(app, 'legacy.authentication.placement') || 'header';
 
   const sessionAuthInHeader = (req, z, bundle) => {
     if (!_.isEmpty(bundle.authData)) {
-      _.each(authMapping, (v, k) => {
-        req.headers[k] = req.headers[k] || renderTemplate(v, bundle.authData);
-      });
+      applyAuthMappingInHeaders(authMapping, req, bundle.authData);
     }
     return req;
   };
 
   const sessionAuthInQuerystring = (req, z, bundle) => {
     if (!_.isEmpty(bundle.authData)) {
-      _.each(authMapping, (v, k) => {
-        req.params[k] = req.params[k] || renderTemplate(v, bundle.authData);
-      });
+      applyAuthMappingInQuerystring(authMapping, req, bundle.authData);
     }
     return req;
   };
 
   const sessionAuthInBoth = (req, z, bundle) => {
     if (!_.isEmpty(bundle.authData)) {
-      _.each(authMapping, (v, k) => {
-        req.headers[k] = req.headers[k] || renderTemplate(v, bundle.authData);
-        req.params[k] = req.params[k] || renderTemplate(v, bundle.authData);
-      });
+      applyAuthMappingInHeaders(authMapping, req, bundle.authData);
+      applyAuthMappingInQuerystring(authMapping, req, bundle.authData);
     }
     return req;
   };
 
-  const getGrantType = req => {
+  const getGrantType = (req) => {
     const grantType = _.get(req, 'params.grant_type');
     if (grantType) {
       return grantType;
@@ -98,18 +126,14 @@ const createBeforeRequest = app => {
 
   const apiKeyInHeader = (req, z, bundle) => {
     if (!_.isEmpty(bundle.authData)) {
-      _.each(authMapping, (v, k) => {
-        req.headers[k] = req.headers[k] || renderTemplate(v, bundle.authData);
-      });
+      applyAuthMappingInHeaders(authMapping, req, bundle.authData);
     }
     return req;
   };
 
   const apiKeyInQuerystring = (req, z, bundle) => {
     if (!_.isEmpty(bundle.authData)) {
-      _.each(authMapping, (v, k) => {
-        req.params[k] = req.params[k] || renderTemplate(v, bundle.authData);
-      });
+      applyAuthMappingInQuerystring(authMapping, req, bundle.authData);
     }
     return req;
   };
@@ -138,10 +162,30 @@ const createBeforeRequest = app => {
       bundle.authData.oauth_token_secret
     ) {
       req.auth = req.auth || {};
-      req.auth.oauth_consumer_key =
-        req.auth.oauth_consumer_key || process.env.CLIENT_ID;
-      req.auth.oauth_consumer_secret =
-        req.auth.oauth_consumer_secret || process.env.CLIENT_SECRET;
+
+      let templateContext;
+
+      if (!req.auth.oauth_consumer_key) {
+        templateContext = Object.assign({}, bundle.authData, bundle.inputData);
+        req.auth.oauth_consumer_key = renderTemplate(
+          process.env.CLIENT_ID,
+          templateContext
+        );
+      }
+      if (!req.auth.oauth_consumer_secret) {
+        if (!templateContext) {
+          templateContext = Object.assign(
+            {},
+            bundle.authData,
+            bundle.inputData
+          );
+        }
+        req.auth.oauth_consumer_secret = renderTemplate(
+          process.env.CLIENT_SECRET,
+          templateContext
+        );
+      }
+
       req.auth.oauth_token =
         req.auth.oauth_token || bundle.authData.oauth_token;
       req.auth.oauth_token_secret =
@@ -150,60 +194,113 @@ const createBeforeRequest = app => {
     return req;
   };
 
-  let beforeRequest;
+  let authBefore;
 
   if (authType === 'session') {
-    beforeRequest = {
+    authBefore = {
       header: sessionAuthInHeader,
       querystring: sessionAuthInQuerystring,
-      both: sessionAuthInBoth
+      both: sessionAuthInBoth,
     }[placement];
   } else if (authType === 'oauth2') {
-    beforeRequest = {
+    authBefore = {
       header: oauth2InHeader,
       querystring: oauth2InQuerystring,
-      both: oauth2InBoth
+      both: oauth2InBoth,
     }[placement];
   } else if (authType === 'custom') {
-    beforeRequest = {
+    authBefore = {
       header: apiKeyInHeader,
-      querystring: apiKeyInQuerystring
+      querystring: apiKeyInQuerystring,
     }[placement];
   } else if (authType === 'basic' || authType === 'digest') {
-    beforeRequest = basicDigestAuth;
+    authBefore = basicDigestAuth;
   } else if (authType === 'oauth1') {
-    beforeRequest = oauth1;
+    authBefore = oauth1;
   }
 
-  if (!beforeRequest) {
-    beforeRequest = req => req;
+  if (!authBefore) {
+    authBefore = (req) => req;
   }
-  return beforeRequest;
+
+  const pruneEmptyBodyForGET = (req, z, bundle) => {
+    if (req.allowGetBody && req.method === 'GET') {
+      const contentType = req.headers['Content-Type'] || '';
+      try {
+        const parsedBody = contentType.includes('application/json')
+          ? JSON.parse(req.body)
+          : req.body;
+        if (_.isEmpty(parsedBody)) {
+          delete req.body;
+        }
+      } catch (err) {
+        // Ignore
+      }
+    }
+    return req;
+  };
+
+  return (req, z, bundle) => {
+    req = authBefore(req, z, bundle);
+    return pruneEmptyBodyForGET(req, z, bundle);
+  };
 };
 
-const createAfterResponse = app => {
-  const authType = _.get(app, 'authentication.type');
+const proxyHeaders = (headers) => {
+  const proxy = {
+    get: (target, prop) => {
+      const original = Reflect.get(target, prop);
+      if (typeof original === 'function' || typeof original === 'symbol') {
+        // defaults to defined functions on the Headers class; the symbol type
+        // is used for accessing an internal map
+        return original;
+      }
+      try {
+        // try to retrieve the header via the get() function
+        return target.get(prop);
+      } catch {
+        // otherwise, default to original target[prop] value
+        return original;
+      }
+    },
+  };
+  return new Proxy(headers, proxy);
+};
 
-  const sessionAuthCheckResponse = (response, z) => {
+const createAfterResponse = (app) => {
+  const authType = _.get(app, 'authentication.type');
+  const autoRefresh = _.get(app, 'authentication.oauth2Config.autoRefresh');
+
+  const throwForStaleAuth = (response, z) => {
     if (response.status === 401) {
-      throw new z.errors.RefreshAuthError('Session key needs refreshing');
+      throw new z.errors.RefreshAuthError('Authentication needs refreshing');
     }
+    return response;
+  };
+
+  const makeHeaderCaseInsensitive = (response, z) => {
+    response.headers = proxyHeaders(response.headers);
     return response;
   };
 
   let afterResponse;
 
-  if (authType === 'session') {
-    afterResponse = sessionAuthCheckResponse;
+  if (authType === 'session' || (authType === 'oauth2' && autoRefresh)) {
+    afterResponse = throwForStaleAuth;
   }
 
   if (!afterResponse) {
-    afterResponse = response => response;
+    afterResponse = (response) => response;
   }
-  return afterResponse;
+
+  return (response, z, bundle) => {
+    response = afterResponse(response, z, bundle);
+    return makeHeaderCaseInsensitive(response);
+  };
 };
 
 module.exports = {
   createBeforeRequest,
-  createAfterResponse
+  createAfterResponse,
+  renderTemplate,
 };

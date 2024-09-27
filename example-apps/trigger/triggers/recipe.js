@@ -1,4 +1,4 @@
-const listRecipes = (z, bundle) => {
+const listRecipes = async (z, bundle) => {
   // `z.console.log()` is similar to `console.log()`.
   z.console.log('console says hello world!');
 
@@ -10,13 +10,14 @@ const listRecipes = (z, bundle) => {
   // You can build requests and our client will helpfully inject all the variables
   // you need to complete. You can also register middleware to control this.
   const requestOptions = {
-    url: 'https://auth-json-server.zapier.ninja/recipes',
-    params: params
+    url: 'https://auth-json-server.zapier-staging.com/recipes',
+    params: params,
   };
 
-  // You may return a promise or a normal data structure from any perform method.
-  return z.request(requestOptions)
-    .then((response) => z.JSON.parse(response.content));
+  // z.request() returns an HTTP Response Object https://github.com/zapier/zapier-platform/tree/master/packages/cli#http-response-object
+  const response = await z.request(requestOptions);
+
+  return response.data;
 };
 
 // We recommend writing your triggers separate like this and rolling them
@@ -29,16 +30,19 @@ module.exports = {
   noun: 'Recipe',
   display: {
     label: 'New Recipe',
-    description: 'Trigger when a new recipe is added.'
+    description: 'Triggers when a new recipe is added.',
   },
 
   // `operation` is where the business logic goes.
   operation: {
-
     // `inputFields` can define the fields a user could provide,
     // we'll pass them in as `bundle.inputData` later.
     inputFields: [
-      {key: 'style', type: 'string',  helpText: 'Which styles of cuisine this should trigger on.'}
+      {
+        key: 'style',
+        type: 'string',
+        helpText: 'Which styles of cuisine this should trigger on.',
+      },
     ],
 
     perform: listRecipes,
@@ -52,7 +56,7 @@ module.exports = {
       name: 'Best Spagetti Ever',
       authorId: 1,
       directions: '1. Boil Noodles\n2.Serve with sauce',
-      style: 'italian'
+      style: 'italian',
     },
 
     // If the resource can have fields that are custom on a per-user basis, define a function to fetch the custom
@@ -61,16 +65,15 @@ module.exports = {
     //    () => { return []; }
     //   ]
     // For a more complete example of using dynamic fields see
-    // https://github.com/zapier/zapier-platform-cli#customdynamic-fields.
+    // https://github.com/zapier/zapier-platform/tree/master/packages/cli#customdynamic-fields.
     // Alternatively, a static field definition should be provided, to specify labels for the fields
     outputFields: [
-      {key: 'id', label: 'ID'},
-      {key: 'createdAt', label: 'Created At'},
-      {key: 'name', label: 'Name'},
-      {key: 'directions', label: 'Directions'},
-      {key: 'authorId', label: 'Author ID'},
-      {key: 'style', label: 'Style'}
-    ]
+      { key: 'id', label: 'ID' },
+      { key: 'createdAt', label: 'Created At' },
+      { key: 'name', label: 'Name' },
+      { key: 'directions', label: 'Directions' },
+      { key: 'authorId', label: 'Author ID' },
+      { key: 'style', label: 'Style' },
+    ],
   },
-
 };

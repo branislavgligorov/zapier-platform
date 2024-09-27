@@ -6,5 +6,7 @@ module.exports = {
   triggerIsArray: require('./trigger-is-array'),
   triggerIsObject: require('./trigger-is-object'),
   triggerHasUniqueIds: require('./trigger-has-unique-ids'),
-  triggerHasId: require('./trigger-has-id')
+  triggerHasId: require('./trigger-has-id'),
+  firehoseSubscriptionIsArray: require('./firehose_is_array'),
+  firehoseSubscriptionKeyIsString: require('./firehose_is_string'),
 };
